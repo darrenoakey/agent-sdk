@@ -12,7 +12,17 @@ import pytest
 
 _ARBITER_HOST = "darren@10.0.0.254"
 _ARBITER_REMOTE_PORT = 8400
-_REQUIRED_ARBITER_MODELS = {"embed-text", "qwen3.6-27b", "qwen3.6-35b"}
+_REQUIRED_ARBITER_MODELS = {
+    "embed-text",
+    "local-chat",
+    "local-summariser",
+    "local-coder",
+    "local-extract",
+    "local-vision",
+    "qwen3.6-27b",
+    "qwen3.6-35b",
+    "gemma4-26b",
+}
 
 
 # ##################################################################
@@ -50,6 +60,9 @@ def _read_arbiter_models(base_url: str) -> set[str]:
         for item in payload
         if item.get("llm_name") or item.get("model_id")
     }
+    for item in payload:
+        for alias in item.get("aliases", []) or []:
+            names.add(str(alias))
     missing = _REQUIRED_ARBITER_MODELS - names
     if missing:
         raise RuntimeError(

@@ -30,7 +30,7 @@ Provider-agnostic AI library with tier-based routing and automatic fallback.
 | Codex | `providers/codex.py` | CLI subprocess (`codex exec --json`), ChatGPT auth |
 | Gemini | `providers/gemini.py` | CLI subprocess (`gemini -p -o json`), Google auth |
 | Ollama | `providers/ollama.py` | HTTP to localhost:11434 |
-| Arbiter | `providers/arbiter.py` | OpenAI-compat HTTP to spark arbiter at `10.0.0.254:8400/v1/chat/completions`. Default for `low`/`free_fast`/`free_thinking` tiers → `arbiter:qwen3.6-27b`. Reasoning models (qwen3 via vLLM `--reasoning-parser qwen3`) populate `message.reasoning` when `message.content` is empty; the provider falls through to reasoning so `Response.text` is never blank. |
+| Arbiter | `providers/arbiter.py` | OpenAI-compat HTTP to spark arbiter at `10.0.0.254:8400/v1/chat/completions`. Defaults: `low`/`free_fast` → `arbiter:local-chat`, `free_thinking` → `arbiter:local-coder`, `summaries` → `arbiter:local-summariser`. Reasoning models (qwen3 via vLLM `--reasoning-parser qwen3`) populate `message.reasoning` when `message.content` is empty; the provider falls through to reasoning so `Response.text` is never blank. |
 
 ## Capabilities
 
@@ -47,7 +47,7 @@ Provider-agnostic AI library with tier-based routing and automatic fallback.
 - **Codex** — wraps `codex` CLI. Uses ChatGPT auth. No `OPENAI_API_KEY`.
 - **Gemini text** — wraps `gemini` CLI. Uses Google auth. No `GEMINI_API_KEY` for text.
 - **Ollama** — local HTTP, no auth at all.
-- **Arbiter** — spark arbiter HTTP, no auth. The arbiter is the GPU job server on the spark machine (GB10 CUDA, 128 GB unified mem) at `10.0.0.254:8400`. Its `/v1/chat/completions` endpoint is OpenAI-compatible and proxies to vLLM-served LLMs (`qwen3.6-27b` default, `gemma4-31b`, `gemma4-26b`).
+- **Arbiter** — spark arbiter HTTP, no auth. The arbiter is the GPU job server on the spark machine (GB10 CUDA, 128 GB unified mem) at `10.0.0.254:8400`. Its `/v1/chat/completions` endpoint is OpenAI-compatible and proxies to vLLM-served LLMs via semantic categories: `local-chat`, `local-summariser`, `local-coder`, `local-extract`, `local-vision`. Concrete model IDs (`qwen3.6-27b`, `qwen3.6-35b`, `gemma4-31b`, `gemma4-26b`) remain valid for back-compat.
 
 The Go OpenAI provider uses `OPENAI_API_KEY` because it calls the API directly (no codex CLI wrapper in Go). This is the one text provider exception in Go.
 

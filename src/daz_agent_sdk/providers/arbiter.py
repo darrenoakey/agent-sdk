@@ -30,6 +30,11 @@ from daz_agent_sdk.types import (
 # ModelInfo construction when the /v1/models probe does not report
 # enough metadata to infer the tier.
 _KNOWN_TIERS: dict[str, Tier] = {
+    "local-chat": Tier.FREE_FAST,
+    "local-summariser": Tier.SUMMARIES,
+    "local-coder": Tier.FREE_THINKING,
+    "local-extract": Tier.FREE_THINKING,
+    "local-vision": Tier.FREE_THINKING,
     "qwen3.6-27b": Tier.SUMMARIES,
     "qwen3.6-35b": Tier.FREE_THINKING,
     "gpt-oss-20b": Tier.FREE_FAST,

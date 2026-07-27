@@ -86,9 +86,10 @@ class Tier(Enum):
     """
     HIGH = "high"              # best quality (claude-opus, gpt-5.6-sol, gemini-2.5-pro) — DEFAULT
     MEDIUM = "medium"          # balanced (claude-sonnet, gemini-2.5-flash)
-    LOW = "low"                # fast + cheap (claude-haiku, gemini-2.5-flash-lite)
-    FREE_FAST = "free_fast"    # local, no cost, fast (ollama small model)
-    FREE_THINKING = "free_thinking"  # local, no cost, deeper (ollama large model)
+    LOW = "low"                # fast + cheap (claude-haiku, gemini-2.5-flash-lite, arbiter:local-chat fallback)
+    FREE_FAST = "free_fast"    # local, no cost, fast (arbiter:local-chat)
+    FREE_THINKING = "free_thinking"  # local, no cost, deeper reasoning (arbiter:local-coder)
+    SUMMARIES = "summaries"    # local, no cost, summarisation-tuned (arbiter:local-summariser)
 
 
 class Capability(Enum):
@@ -173,7 +174,9 @@ class AudioResult:
 # ~/.daz-agent-sdk/config.yaml
 # Everything here is optional. Sensible defaults apply.
 
-# Map tiers to ordered provider:model lists (first = preferred, rest = fallbacks)
+# Map tiers to ordered provider:model lists (first = preferred, rest = fallbacks).
+# Built-in defaults use arbiter semantic categories so the model behind each
+# alias can move without reconfiguring every caller.
 tiers:
   high:
     - claude:claude-opus-4-6
@@ -186,13 +189,13 @@ tiers:
   low:
     - claude:claude-haiku-4-5-20251001
     - gemini:gemini-2.5-flash-lite
-    - ollama:qwen3-8b
+    - arbiter:local-chat
   free_fast:
-    - ollama:qwen3-8b
-    - vllm:default
+    - arbiter:local-chat
   free_thinking:
-    - ollama:qwen3-30b-32k
-    - ollama:deepseek-r1:14b
+    - arbiter:local-coder
+  summaries:
+    - arbiter:local-summariser
 
 # Provider-specific configuration
 providers:
@@ -704,7 +707,7 @@ async def classify_alert(alert_text: str) -> AlertClassification:
     result = await agent.ask(
         f"Classify this alert:\n{alert_text}",
         schema=AlertClassification,
-        tier=Tier.FREE_FAST,  # ollama — free, fast, no rate limits
+        tier=Tier.FREE_FAST,  # arbiter:local-chat — free, fast, no rate limits
     )
     return result.parsed
 ```

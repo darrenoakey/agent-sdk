@@ -153,16 +153,19 @@ class Config:
                 "codex:gpt-5.6-sol",
                 "gemini:gemini-2.5-flash",
             ],
+            "summaries": [
+                "arbiter:local-summariser",
+            ],
             "low": [
                 "claude:claude-haiku-4-5-20251001",
                 "gemini:gemini-2.5-flash-lite",
-                "arbiter:gemma4-26b",
+                "arbiter:local-chat",
             ],
             "free_fast": [
-                "arbiter:gemma4-26b",
+                "arbiter:local-chat",
             ],
             "free_thinking": [
-                "arbiter:gemma4-26b",
+                "arbiter:local-coder",
             ],
         }
         for tier_key, chain in defaults.items():

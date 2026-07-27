@@ -15,8 +15,8 @@ func TestLoadConfigDefaults(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Verify all 6 tiers exist
-	expectedTiers := []string{"very_high", "high", "medium", "low", "free_fast", "free_thinking"}
+	// Verify all 7 tiers exist
+	expectedTiers := []string{"very_high", "high", "medium", "low", "free_fast", "free_thinking", "summaries"}
 	for _, tier := range expectedTiers {
 		if _, ok := cfg.Tiers[tier]; !ok {
 			t.Errorf("missing default tier %q", tier)
@@ -39,8 +39,9 @@ func TestDefaultTierChains(t *testing.T) {
 		{TierHigh, 3, "claude:claude-opus-4-6"},
 		{TierMedium, 3, "claude:claude-sonnet-4-6"},
 		{TierLow, 3, "claude:claude-haiku-4-5-20251001"},
-		{TierFreeFast, 1, "arbiter:gemma4-26b"},
-		{TierFreeThinking, 1, "arbiter:gemma4-26b"},
+		{TierFreeFast, 1, "arbiter:local-chat"},
+		{TierFreeThinking, 1, "arbiter:local-coder"},
+		{TierSummaries, 1, "arbiter:local-summariser"},
 	}
 
 	for _, tt := range tests {

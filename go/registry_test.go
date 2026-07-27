@@ -116,7 +116,7 @@ func TestGetModelsForTier(t *testing.T) {
 
 	cfg, _ := LoadConfig("/nonexistent/path/config.yaml")
 
-	// free_fast tier has "arbiter:gemma4-26b" in default config
+	// free_fast tier has "arbiter:local-chat" in default config
 	models := GetModelsForTier(TierFreeFast, nil, cfg)
 	if len(models) == 0 {
 		t.Fatal("expected at least one model for free_fast tier")
@@ -124,8 +124,8 @@ func TestGetModelsForTier(t *testing.T) {
 	if models[0].Provider != "arbiter" {
 		t.Errorf("first model provider = %q, want arbiter", models[0].Provider)
 	}
-	if models[0].ModelID != "gemma4-26b" {
-		t.Errorf("first model id = %q, want gemma4-26b", models[0].ModelID)
+	if models[0].ModelID != "local-chat" {
+		t.Errorf("first model id = %q, want local-chat", models[0].ModelID)
 	}
 }
 

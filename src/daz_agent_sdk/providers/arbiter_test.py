@@ -43,6 +43,22 @@ def test_known_tiers_contains_qwen() -> None:
     assert _KNOWN_TIERS["qwen3.6-27b"] == Tier.SUMMARIES
 
 
+def test_known_tiers_maps_category_aliases() -> None:
+    assert _KNOWN_TIERS["local-chat"] == Tier.FREE_FAST
+    assert _KNOWN_TIERS["local-summariser"] == Tier.SUMMARIES
+    assert _KNOWN_TIERS["local-coder"] == Tier.FREE_THINKING
+    assert _KNOWN_TIERS["local-extract"] == Tier.FREE_THINKING
+    assert _KNOWN_TIERS["local-vision"] == Tier.FREE_THINKING
+
+
+def test_known_tiers_keeps_concrete_model_backcompat() -> None:
+    # concrete arbiter model IDs must still resolve to their historical tiers
+    # even after the category-alias migration.
+    assert _KNOWN_TIERS["qwen3.6-35b"] == Tier.FREE_THINKING
+    assert _KNOWN_TIERS["gemma4-26b"] == Tier.FREE_THINKING
+    assert _KNOWN_TIERS["gpt-oss-20b"] == Tier.FREE_FAST
+
+
 # ##################################################################
 # constructor — unit tests
 def test_constructor_defaults_to_spark_arbiter() -> None:
@@ -270,8 +286,8 @@ async def test_complete_max_tokens_caps_output(arbiter_tunnel_url: str) -> None:
         "arbiter is unreachable through its loopback tunnel"
     )
     models = await provider.list_models()
-    target = next((m for m in models if m.model_id == "qwen3.6-35b"), None)
-    assert target is not None, "qwen3.6-35b is not registered"
+    target = next((m for m in models if m.model_id == "qwen3.6-27b"), None)
+    assert target is not None, "qwen3.6-27b is not registered"
     messages = [
         Message(
             role="user",

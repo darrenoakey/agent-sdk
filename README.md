@@ -77,8 +77,9 @@ Not every question needs the most powerful (and most expensive) model. Use **tie
 | `Tier.HIGH` | Best available model (this is the default) | Important work, creative projects |
 | `Tier.MEDIUM` | Great quality, faster | Everyday tasks |
 | `Tier.LOW` | Fast and economical | Summaries, simple classification |
-| `Tier.FREE_FAST` | Local models, completely free | Bulk processing, drafts |
-| `Tier.FREE_THINKING` | Local models with deeper reasoning | Complex analysis without cloud costs |
+| `Tier.FREE_FAST` | Local arbiter alias, free and fast | Bulk processing, drafts |
+| `Tier.FREE_THINKING` | Local arbiter alias with deeper reasoning | Complex analysis without cloud costs |
+| `Tier.SUMMARIES` | Local arbiter alias tuned for summarisation | Long-text summarisation |
 
 ```python
 # Quick and cheap — great for processing lots of items
@@ -297,6 +298,8 @@ daz-agent-sdk works out of the box with no configuration at all. When you're rea
 
 ```yaml
 # Which providers to try for each tier (first = preferred)
+# Defaults use arbiter semantic categories; the arbiter resolves the alias
+# to the current model. Concrete provider:model IDs still work as fallbacks.
 tiers:
   high:
     - claude:claude-opus-4-6
@@ -306,9 +309,13 @@ tiers:
     - gemini:gemini-2.5-flash
   low:
     - claude:claude-haiku-4-5-20251001
-    - ollama:qwen3-8b
+    - arbiter:local-chat
   free_fast:
-    - ollama:qwen3-8b
+    - arbiter:local-chat
+  free_thinking:
+    - arbiter:local-coder
+  summaries:
+    - arbiter:local-summariser
 
 # Provider settings
 providers:
@@ -351,7 +358,7 @@ Useful for debugging, understanding costs, or just reviewing what happened. You 
 
 **Start with zero configuration.** The defaults are sensible. Get something working first, then customise if you need to.
 
-**Say `Tier.LOW` instead of a model name.** If you hardcode `ollama:qwen3-8b`, you'll need to change every file if you switch. If you say `Tier.LOW`, you update the config once.
+**Say `Tier.LOW` instead of a model name.** If you hardcode `arbiter:local-chat`, you'll need to change every file if the arbiter reassigns that alias. If you say `Tier.LOW`, you update the config once.
 
 **Reach for structured output early.** Any time you're thinking "I'll parse the response with regex", use a Pydantic schema instead. It's more reliable, gives you typed data, and works across every provider.
 

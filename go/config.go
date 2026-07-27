@@ -139,16 +139,19 @@ func defaultTierChains() map[string]TierConfig {
 			"codex:gpt-5.6-sol",
 			"gemini:gemini-2.5-flash",
 		}},
+		"summaries": {Chain: []string{
+			"arbiter:local-summariser",
+		}},
 		"low": {Chain: []string{
 			"claude:claude-haiku-4-5-20251001",
-			"gemini:gemini-3.1-flash-lite",
-			"arbiter:gemma4-26b",
+			"gemini:gemini-2.5-flash-lite",
+			"arbiter:local-chat",
 		}},
 		"free_fast": {Chain: []string{
-			"arbiter:gemma4-26b",
+			"arbiter:local-chat",
 		}},
 		"free_thinking": {Chain: []string{
-			"arbiter:gemma4-26b",
+			"arbiter:local-coder",
 		}},
 	}
 }

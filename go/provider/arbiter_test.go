@@ -102,6 +102,27 @@ func TestKnownArbiterTiers(t *testing.T) {
 	if knownArbiterTiers["qwen3.6-27b"] != sdk.TierSummaries {
 		t.Errorf("qwen3.6-27b should be Summaries")
 	}
+	if knownArbiterTiers["local-chat"] != sdk.TierFreeFast {
+		t.Errorf("local-chat should be FreeFast")
+	}
+	if knownArbiterTiers["local-summariser"] != sdk.TierSummaries {
+		t.Errorf("local-summariser should be Summaries")
+	}
+	if knownArbiterTiers["local-coder"] != sdk.TierFreeThinking {
+		t.Errorf("local-coder should be FreeThinking")
+	}
+	if knownArbiterTiers["local-extract"] != sdk.TierFreeThinking {
+		t.Errorf("local-extract should be FreeThinking")
+	}
+	if knownArbiterTiers["local-vision"] != sdk.TierFreeThinking {
+		t.Errorf("local-vision should be FreeThinking")
+	}
+	if knownArbiterTiers["qwen3.6-35b"] != sdk.TierFreeThinking {
+		t.Errorf("qwen3.6-35b should still map to FreeThinking (back-compat)")
+	}
+	if knownArbiterTiers["gemma4-26b"] != sdk.TierFreeThinking {
+		t.Errorf("gemma4-26b should still map to FreeThinking (back-compat)")
+	}
 }
 
 func TestNewArbiterProviderDefaults(t *testing.T) {

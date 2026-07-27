@@ -25,7 +25,7 @@ def test_default_config_no_file(tmp_path: Path) -> None:
 
 # ##################################################################
 # default tier chains
-# verify all five tiers have non-empty chains with correct first entry
+# verify all seven tiers have non-empty chains with correct first entry
 def test_default_tier_very_high(tmp_path: Path) -> None:
     cfg = load_config(tmp_path / "absent.yaml")
     chain = cfg.tiers["very_high"].chain
@@ -52,22 +52,35 @@ def test_default_tier_low(tmp_path: Path) -> None:
     assert chain[0] == "claude:claude-haiku-4-5-20251001"
 
 
+def test_default_tier_summaries(tmp_path: Path) -> None:
+    cfg = load_config(tmp_path / "absent.yaml")
+    chain = cfg.tiers["summaries"].chain
+    assert chain[0] == "arbiter:local-summariser"
+
+
 def test_default_tier_free_fast(tmp_path: Path) -> None:
     cfg = load_config(tmp_path / "absent.yaml")
     chain = cfg.tiers["free_fast"].chain
-    assert chain[0] == "arbiter:gemma4-26b"
+    assert chain[0] == "arbiter:local-chat"
 
 
 def test_default_tier_free_thinking(tmp_path: Path) -> None:
     cfg = load_config(tmp_path / "absent.yaml")
     chain = cfg.tiers["free_thinking"].chain
-    assert chain[0] == "arbiter:gemma4-26b"
+    assert chain[0] == "arbiter:local-coder"
 
 
 def test_default_tier_low_includes_arbiter(tmp_path: Path) -> None:
     cfg = load_config(tmp_path / "absent.yaml")
     chain = cfg.tiers["low"].chain
-    assert "arbiter:gemma4-26b" in chain
+    assert "arbiter:local-chat" in chain
+
+
+def test_default_tier_low_keeps_backcompat_concrete_models(tmp_path: Path) -> None:
+    cfg = load_config(tmp_path / "absent.yaml")
+    # concrete model IDs still parse and are not removed from the config type
+    assert "arbiter:gemma4-26b" not in cfg.tiers["low"].chain
+    assert "arbiter:qwen3.6-35b" not in cfg.tiers["low"].chain
 
 
 def test_default_provider_arbiter(tmp_path: Path) -> None:
@@ -266,13 +279,19 @@ def test_get_tier_chain_low(tmp_path: Path) -> None:
 def test_get_tier_chain_free_fast(tmp_path: Path) -> None:
     cfg = load_config(tmp_path / "absent.yaml")
     chain = get_tier_chain(Tier.FREE_FAST, cfg)
-    assert chain[0] == "arbiter:gemma4-26b"
+    assert chain[0] == "arbiter:local-chat"
 
 
 def test_get_tier_chain_free_thinking(tmp_path: Path) -> None:
     cfg = load_config(tmp_path / "absent.yaml")
     chain = get_tier_chain(Tier.FREE_THINKING, cfg)
-    assert chain[0] == "arbiter:gemma4-26b"
+    assert chain[0] == "arbiter:local-coder"
+
+
+def test_get_tier_chain_summaries(tmp_path: Path) -> None:
+    cfg = load_config(tmp_path / "absent.yaml")
+    chain = get_tier_chain(Tier.SUMMARIES, cfg)
+    assert chain[0] == "arbiter:local-summariser"
 
 
 def test_get_tier_chain_returns_copy(tmp_path: Path) -> None:
