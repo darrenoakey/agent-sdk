@@ -15,9 +15,9 @@ from daz_agent_sdk.types import AgentError, ErrorKind, Tier
 # generates an image and prints the output path
 async def _run_image(args: argparse.Namespace) -> int:
     from daz_agent_sdk.capabilities.image import (
-        _validate_legacy_image_config,
         _validate_image_route,
         _validate_image_timeout,
+        _validate_legacy_image_config,
         resume_image_operation,
     )
 

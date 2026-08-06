@@ -4,7 +4,6 @@ from pathlib import Path
 
 import yaml
 
-from daz_agent_sdk.types import Tier
 from daz_agent_sdk.config import (
     Config,
     get_image_steps,
@@ -12,6 +11,7 @@ from daz_agent_sdk.config import (
     get_tier_chain,
     load_config,
 )
+from daz_agent_sdk.types import Tier
 
 
 # ##################################################################

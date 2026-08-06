@@ -198,7 +198,8 @@ async def test_stream_timeout_reaps_real_codex_process() -> None:
     task = asyncio.create_task(consume())
     child_pid = 0
     for _ in range(50):
-        process_list = subprocess.run(
+        process_list = await asyncio.to_thread(
+            subprocess.run,
             ["/bin/ps", "-axo", "pid=,ppid=,comm="],
             capture_output=True,
             text=True,

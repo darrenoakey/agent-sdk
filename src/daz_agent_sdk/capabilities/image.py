@@ -6,14 +6,15 @@ import fcntl
 import hashlib
 import json
 import os
-import struct
 import stat
+import struct
 import subprocess
 import uuid
+from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from io import BytesIO
 from pathlib import Path
-from typing import Any, AsyncIterator, Sequence
+from typing import Any
 from uuid import UUID
 
 from daz_agent_sdk.config import Config
@@ -28,7 +29,6 @@ from daz_agent_sdk.types import (
     ModelInfo,
     Tier,
 )
-
 
 # ##################################################################
 # codex model info — image generation always goes through the mac mini
@@ -219,7 +219,7 @@ def _read_operation(path: Path) -> dict[str, Any]:
         raise ValueError(f"image operation state exceeds size limit: {path}")
     state = json.loads(raw)
     if not isinstance(state, dict):
-        raise ValueError(f"image operation state is not a JSON object: {path}")
+        raise TypeError(f"image operation state is not a JSON object: {path}")
     _validate_operation_state(state, path)
     return state
 
@@ -429,7 +429,7 @@ def _validate_operation_state(state: dict[str, Any], path: Path) -> None:
     except ValueError as exc:
         raise ValueError(f"image operation request body is invalid: {path}") from exc
     if not isinstance(parsed, dict):
-        raise ValueError(f"image operation request body is not an object: {path}")
+        raise TypeError(f"image operation request body is not an object: {path}")
     output_path = Path(state["output_path"])
     if not output_path.is_absolute():
         raise ValueError(f"image operation output path is not absolute: {path}")

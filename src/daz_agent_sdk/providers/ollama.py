@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any, AsyncIterator, Type
+from typing import Any
 from uuid import uuid4
 
 import aiohttp
@@ -78,13 +79,15 @@ class OllamaProvider(Provider):
     # if the server responds with HTTP 200, False otherwise.
     async def available(self) -> bool:
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
+            async with (
+                aiohttp.ClientSession() as session,
+                session.get(
                     f"{self._base_url}/api/tags",
                     timeout=aiohttp.ClientTimeout(total=5.0),
-                ) as resp:
-                    return resp.status == 200
-        except Exception:
+                ) as resp,
+            ):
+                return resp.status == 200
+        except Exception:  # noqa: BLE001 - probe: any failure means "not available"
             return False
 
     # ##################################################################
@@ -94,15 +97,17 @@ class OllamaProvider(Provider):
     # tier is inferred from parameter count when available.
     async def list_models(self) -> list[ModelInfo]:
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
+            async with (
+                aiohttp.ClientSession() as session,
+                session.get(
                     f"{self._base_url}/api/tags",
                     timeout=aiohttp.ClientTimeout(total=10.0),
-                ) as resp:
-                    if resp.status != 200:
-                        return []
-                    data = await resp.json()
-        except Exception:
+                ) as resp,
+            ):
+                if resp.status != 200:
+                    return []
+                data = await resp.json()
+        except Exception:  # noqa: BLE001 - probe: any failure means "no models"
             return []
 
         models: list[ModelInfo] = []
@@ -159,7 +164,7 @@ class OllamaProvider(Provider):
         messages: list[Message],
         model: ModelInfo,
         *,
-        schema: Type[T] | None = None,
+        schema: type[T] | None = None,
         tools: list[str] | None = None,
         cwd: str | Path | None = None,
         max_turns: int = 1,
@@ -202,24 +207,26 @@ class OllamaProvider(Provider):
             payload["format"] = schema.model_json_schema()
 
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
+            async with (
+                aiohttp.ClientSession() as session,
+                session.post(
                     f"{self._base_url}/api/chat",
                     json=payload,
                     timeout=aiohttp.ClientTimeout(total=timeout),
-                ) as resp:
-                    if resp.status == 429:
-                        raise AgentError(
-                            f"Ollama rate limit: {resp.status}",
-                            kind=ErrorKind.RATE_LIMIT,
-                        )
-                    if resp.status >= 400:
-                        body = await resp.text()
-                        raise AgentError(
-                            f"Ollama error {resp.status}: {body}",
-                            kind=ErrorKind.INTERNAL,
-                        )
-                    data = await resp.json()
+                ) as resp,
+            ):
+                if resp.status == 429:
+                    raise AgentError(
+                        f"Ollama rate limit: {resp.status}",
+                        kind=ErrorKind.RATE_LIMIT,
+                    )
+                if resp.status >= 400:
+                    body = await resp.text()
+                    raise AgentError(
+                        f"Ollama error {resp.status}: {body}",
+                        kind=ErrorKind.INTERNAL,
+                    )
+                data = await resp.json()
         except AgentError:
             raise
         except Exception as exc:
@@ -277,36 +284,38 @@ class OllamaProvider(Provider):
         }
 
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
+            async with (
+                aiohttp.ClientSession() as session,
+                session.post(
                     f"{self._base_url}/api/chat",
                     json=payload,
                     timeout=aiohttp.ClientTimeout(total=timeout),
-                ) as resp:
-                    if resp.status == 429:
-                        raise AgentError(
-                            f"Ollama rate limit: {resp.status}",
-                            kind=ErrorKind.RATE_LIMIT,
-                        )
-                    if resp.status >= 400:
-                        body = await resp.text()
-                        raise AgentError(
-                            f"Ollama error {resp.status}: {body}",
-                            kind=ErrorKind.INTERNAL,
-                        )
-                    async for raw_line in resp.content:
-                        line = raw_line.decode("utf-8").strip()
-                        if not line:
-                            continue
-                        try:
-                            obj = json.loads(line)
-                        except json.JSONDecodeError:
-                            continue
-                        chunk = (obj.get("message") or {}).get("content") or ""
-                        if chunk:
-                            yield chunk
-                        if obj.get("done"):
-                            break
+                ) as resp,
+            ):
+                if resp.status == 429:
+                    raise AgentError(
+                        f"Ollama rate limit: {resp.status}",
+                        kind=ErrorKind.RATE_LIMIT,
+                    )
+                if resp.status >= 400:
+                    body = await resp.text()
+                    raise AgentError(
+                        f"Ollama error {resp.status}: {body}",
+                        kind=ErrorKind.INTERNAL,
+                    )
+                async for raw_line in resp.content:
+                    line = raw_line.decode("utf-8").strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    chunk = (obj.get("message") or {}).get("content") or ""
+                    if chunk:
+                        yield chunk
+                    if obj.get("done"):
+                        break
         except AgentError:
             raise
         except Exception as exc:

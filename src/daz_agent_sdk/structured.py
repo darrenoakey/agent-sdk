@@ -18,7 +18,7 @@ import logging
 import os
 import tempfile
 from pathlib import Path
-from typing import Type, TypeVar
+from typing import TypeVar
 from uuid import uuid4
 
 from pydantic import BaseModel
@@ -35,7 +35,7 @@ def schema_filename() -> str:
     return f"_structured_output_{uuid4().hex[:12]}.json"
 
 
-def schema_instructions(schema_cls: Type[BaseModel], filename: str) -> str:
+def schema_instructions(schema_cls: type[BaseModel], filename: str) -> str:
     """Build the prompt suffix that tells the AI to write its structured output to a file."""
     schema_json = json.dumps(schema_cls.model_json_schema(), indent=2)
     return (
@@ -62,7 +62,7 @@ def ensure_cwd(cwd: str | Path | None) -> tuple[str, bool]:
 
 
 def extract_result(
-    schema_cls: Type[T],
+    schema_cls: type[T],
     filename: str,
     cwd: str,
     response_text: str,

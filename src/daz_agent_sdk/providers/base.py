@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import AsyncIterator, Type
 
 from daz_agent_sdk.types import Message, ModelInfo, Response, StructuredResponse, T
 
@@ -40,7 +40,7 @@ class Provider(ABC):
         messages: list[Message],
         model: ModelInfo,
         *,
-        schema: Type[T] | None = None,
+        schema: type[T] | None = None,
         tools: list[str] | None = None,
         cwd: str | Path | None = None,
         max_turns: int = 1,

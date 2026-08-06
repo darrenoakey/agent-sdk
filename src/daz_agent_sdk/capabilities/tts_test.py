@@ -8,7 +8,6 @@ from daz_agent_sdk.capabilities.tts import (
     _make_temp_output,
 )
 
-
 # ##################################################################
 # command building tests
 

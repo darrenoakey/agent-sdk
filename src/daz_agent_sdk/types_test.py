@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from daz_agent_sdk.types import (
     AgentError,
@@ -20,7 +21,6 @@ from daz_agent_sdk.types import (
     parse_json_from_llm,
     validate_structured_json,
 )
-from pathlib import Path
 
 
 # ##################################################################
@@ -81,7 +81,7 @@ def test_model_info_frozen() -> None:
         tier=Tier.FREE_FAST,
     )
     with pytest.raises(AttributeError):
-        setattr(info, "provider", "changed")
+        setattr(info, "provider", "changed")  # noqa: B010 - verifying frozen-field mutation raises
 
 
 # ##################################################################
@@ -286,11 +286,11 @@ def test_validate_structured_schema_echo_quirk() -> None:
 
 
 def test_validate_structured_genuine_mismatch_raises() -> None:
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         validate_structured_json(_Wrapper, {"bogus": 1})
 
 
 def test_validate_structured_multi_field_schema_not_coerced() -> None:
     # wrapper coercion must ONLY apply to single-list-field schemas
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         validate_structured_json(_TwoField, {"name": "not a two-field"})

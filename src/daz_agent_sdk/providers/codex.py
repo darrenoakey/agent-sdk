@@ -5,7 +5,7 @@ import json
 import shutil
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any, Type
+from typing import Any
 from uuid import uuid4
 
 from daz_agent_sdk.providers.base import Provider
@@ -190,7 +190,7 @@ class CodexProvider(Provider):
         messages: list[Message],
         model: ModelInfo,
         *,
-        schema: Type[T] | None = None,
+        schema: type[T] | None = None,
         tools: list[str] | None = None,
         cwd: str | Path | None = None,
         max_turns: int = 1,

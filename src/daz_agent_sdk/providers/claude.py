@@ -5,11 +5,10 @@ import logging
 import os
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any, Type, TypeVar
-
-from pydantic import BaseModel
+from typing import Any, TypeVar
 
 import claude_agent_sdk as _sdk
+from pydantic import BaseModel
 
 from daz_agent_sdk.types import (
     AgentError,
@@ -148,7 +147,7 @@ class ClaudeProvider:
         messages: list[Message],
         model: ModelInfo,
         *,
-        schema: Type[T] | None = None,
+        schema: type[T] | None = None,
         tools: list[str] | None = None,
         cwd: str | Path | None = None,
         max_turns: int = 1,
@@ -202,6 +201,7 @@ class ClaudeProvider:
             parsed_data = structured_output
             if parsed_data is None and response_text:
                 import json
+
                 from daz_agent_sdk.types import parse_json_from_llm
 
                 try:
@@ -329,20 +329,20 @@ def _build_options(
 async def _collect_response(prompt: str, options: Any) -> tuple[str, Any]:
     import importlib
 
-    _client = importlib.import_module("claude_agent_sdk._internal.client")
+    _client: Any = importlib.import_module("claude_agent_sdk._internal.client")
 
     class _SkipMessage:
         """Sentinel returned for unparseable messages."""
 
-    _orig_parse = getattr(_client, "parse_message")
+    _orig_parse = _client.parse_message
 
     def _safe_parse(data: Any) -> Any:
         try:
             return _orig_parse(data)
-        except Exception:
+        except Exception:  # noqa: BLE001 - monkeypatched parser: any failure means "unparseable, skip"
             return _SkipMessage()
 
-    setattr(_client, "parse_message", _safe_parse)
+    _client.parse_message = _safe_parse
     parts: list[str] = []
     result_text: str | None = None
     structured_output: Any = None
@@ -392,7 +392,7 @@ async def _collect_response(prompt: str, options: Any) -> tuple[str, Any]:
         else:
             raise
     finally:
-        setattr(_client, "parse_message", _orig_parse)
+        _client.parse_message = _orig_parse
     # prefer ResultMessage.result (final answer) over intermediate text
     if result_text is not None:
         return result_text.strip(), structured_output
@@ -414,20 +414,20 @@ async def _collect_response(prompt: str, options: Any) -> tuple[str, Any]:
 async def _stream_response(prompt: str, options: Any) -> AsyncIterator[str]:
     import importlib
 
-    _client = importlib.import_module("claude_agent_sdk._internal.client")
+    _client: Any = importlib.import_module("claude_agent_sdk._internal.client")
 
     class _SkipMessage:
         pass
 
-    _orig_parse = getattr(_client, "parse_message")
+    _orig_parse = _client.parse_message
 
     def _safe_parse(data: Any) -> Any:
         try:
             return _orig_parse(data)
-        except Exception:
+        except Exception:  # noqa: BLE001 - monkeypatched parser: any failure means "unparseable, skip"
             return _SkipMessage()
 
-    setattr(_client, "parse_message", _safe_parse)
+    _client.parse_message = _safe_parse
     try:
         async for message in _sdk.query(prompt=prompt, options=options):
             if isinstance(message, _SkipMessage):
@@ -442,7 +442,7 @@ async def _stream_response(prompt: str, options: Any) -> AsyncIterator[str]:
         else:
             raise
     finally:
-        setattr(_client, "parse_message", _orig_parse)
+        _client.parse_message = _orig_parse
 
 
 # ##################################################################

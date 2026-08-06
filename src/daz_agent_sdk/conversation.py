@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import copy
-from typing import Any, AsyncIterator, Type
+from collections.abc import AsyncIterator
+from typing import Any, Self
 from uuid import UUID, uuid4
 
 from daz_agent_sdk.config import Config, get_tier_chain, load_config
@@ -66,7 +67,7 @@ class Conversation:
     # ##################################################################
     # aenter
     # create the conversation logger and assign a unique conversation id
-    async def __aenter__(self) -> Conversation:
+    async def __aenter__(self) -> Self:
         self._conversation_id = uuid4()
         cfg = self._config or load_config()
         self._logger = ConversationLogger(
@@ -96,7 +97,7 @@ class Conversation:
         self,
         content: str,
         *,
-        schema: Type[T] | None = None,
+        schema: type[T] | None = None,
         tier: Tier | None = None,
         timeout: float = 3600.0,
         max_turns: int = 10000,

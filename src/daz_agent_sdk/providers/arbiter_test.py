@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from pydantic import BaseModel
 
-from daz_agent_sdk.providers.arbiter import ArbiterProvider, _KNOWN_TIERS
+from daz_agent_sdk.providers.arbiter import _KNOWN_TIERS, ArbiterProvider
 from daz_agent_sdk.types import (
     AgentError,
     Capability,
@@ -14,7 +14,6 @@ from daz_agent_sdk.types import (
     StructuredResponse,
     Tier,
 )
-
 
 # ##################################################################
 # test model selection
@@ -260,9 +259,10 @@ def test_answer_from_message_empty_content_with_reasoning_raises_retryable() -> 
     # an interrupted generation has reasoning but no answer — that must be a
     # retryable failure, never silently handed back as the answer (observed
     # live: chain-of-thought saved as a novel section's prose).
+    import pytest as _pytest
+
     from daz_agent_sdk.providers.arbiter import _answer_from_message
     from daz_agent_sdk.types import AgentError, ErrorKind
-    import pytest as _pytest
 
     msg = {"content": "", "reasoning": "1. Analyze the user input..."}
     with _pytest.raises(AgentError) as exc_info:

@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-
 # ##################################################################
 # default log base
 # fallback directory used when config does not specify a log location
@@ -88,9 +87,11 @@ class ConversationLogger:
     def _write_jsonl(self, entry: dict[str, Any]) -> None:
         try:
             line = json.dumps(entry, default=str) + "\n"
-            with self._lock:
-                with open(self._log_dir / "events.jsonl", "a", encoding="utf-8") as fh:
-                    fh.write(line)
+            with (
+                self._lock,
+                open(self._log_dir / "events.jsonl", "a", encoding="utf-8") as fh,
+            ):
+                fh.write(line)
         except OSError:
             pass
 

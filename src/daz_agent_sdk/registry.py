@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import importlib
 from typing import Any
+
 from daz_agent_sdk.config import Config, get_tier_chain, load_config
 from daz_agent_sdk.providers.base import Provider
 from daz_agent_sdk.types import Capability, ModelInfo, Tier
-
 
 # ##################################################################
 # known providers
@@ -68,7 +68,7 @@ def _load_provider(name: str, config: Config | None = None) -> Provider | None:
         except TypeError:
             instance = provider_class()
         return instance
-    except Exception:
+    except Exception:  # noqa: BLE001 - provider load: any import/construct failure means "unavailable"
         return None
 
 
@@ -86,7 +86,6 @@ def register_provider_module(name: str, module_path: str) -> None:
 # whose module is missing or raises are silently skipped.
 # result is cached after first load.
 def get_providers() -> dict[str, Provider]:
-    global _provider_cache
     if _provider_cache:
         return dict(_provider_cache)
 
@@ -214,7 +213,7 @@ def _get_static_models(provider: Provider) -> list[ModelInfo]:
     module = type(provider).__module__
     try:
         mod = importlib.import_module(module)
-    except Exception:
+    except Exception:  # noqa: BLE001 - static model probe: any import failure means "no static models"
         return []
 
     # look for the conventional _<PROVIDER>_MODELS list
