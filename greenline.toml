@@ -6,7 +6,7 @@ main_branch = "main"
 # Verdict command. cwd = the worktree being gated. Must build + lint + run the
 # FULL test suite against a TEST datastore, and exit nonzero on any failure.
 # Must be safe to run concurrently from multiple worktrees.
-check = "./run check"
+check = "./release-gate"
 
 # Deploy command. cwd = the canonical checkout. Must rebuild/restart prod,
 # health-check, exit nonzero on unhealthy, and be idempotent (safe to re-run).
