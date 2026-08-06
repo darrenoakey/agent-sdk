@@ -13,11 +13,10 @@ import (
 	"image/jpeg"
 	_ "image/png"
 	"io"
+	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -148,7 +147,7 @@ func submitEncodedImageJob(parent context.Context, prompt string, options ImageO
 }
 
 func postImageServiceJob(parent context.Context, body []byte, key string) (*agentsdk.ImageSubmission, bool, error) {
-	data, status, err := curlImageServiceBytes(parent, http.MethodPost, "/jobs", body, key)
+	data, status, err := requestImageServiceBytes(parent, http.MethodPost, "/jobs", body, key)
 	if err != nil {
 		return nil, false, err
 	}
@@ -272,16 +271,12 @@ func recoverableJobError(jobId, status string, cause error) error {
 }
 
 func imageServiceJson(parent context.Context, method, path string, payload any, target any) error {
-	data, status, err := curlImageService(parent, method, path, payload)
+	data, status, err := requestImageService(parent, method, path, payload)
 	if err != nil {
 		return err
 	}
-	if status < 200 || status >= 300 {
-		kind := agentsdk.ErrorInternal
-		if status == http.StatusRequestTimeout || status == http.StatusTooEarly || status == http.StatusTooManyRequests || status >= 500 {
-			kind = agentsdk.ErrorNotAvailable
-		}
-		return agentsdk.NewAgentError(fmt.Sprintf("image service returned HTTP %d: %s", status, data), kind, nil)
+	if responseError := imageServiceResponseError(status, data); responseError != nil {
+		return responseError
 	}
 	if err := json.Unmarshal(data, target); err != nil {
 		return agentsdk.NewAgentError("image service returned invalid JSON: "+err.Error(), agentsdk.ErrorInternal, nil)
@@ -289,12 +284,35 @@ func imageServiceJson(parent context.Context, method, path string, payload any, 
 	return nil
 }
 
+func imageServiceResponseError(status int, data []byte) error {
+	if status >= 200 && status < 300 {
+		return nil
+	}
+	recoverable := status == http.StatusRequestTimeout || status == http.StatusTooEarly || status == http.StatusTooManyRequests || status >= 500
+	kind := agentsdk.ErrorInternal
+	if recoverable {
+		kind = agentsdk.ErrorNotAvailable
+	}
+	attempts := []map[string]any{{"http_status": status, "recoverable": recoverable}}
+	return agentsdk.NewAgentError(fmt.Sprintf("image service returned HTTP %d: %s", status, data), kind, attempts)
+}
+
 func fetchImageServiceImage(parent context.Context, jobId string) ([]byte, error) {
-	data, status, err := curlImageService(parent, http.MethodGet, "/jobs/"+jobId+"/image", nil)
+	data, status, err := requestImageService(parent, http.MethodGet, "/jobs/"+jobId+"/image", nil)
 	if err != nil {
 		return nil, recoverableJobError(jobId, "done", err)
 	}
 	if status < 200 || status >= 300 {
+		// Missing artifact (404) is terminal once the job record itself is gone or
+		// no longer serves bytes. Callers must short-circuit on a local PNG first.
+		if status == http.StatusNotFound || status == http.StatusGone {
+			attempts := []map[string]any{{"job_id": jobId, "status": "done", "recoverable": false, "http_status": status}}
+			return nil, agentsdk.NewAgentError(
+				fmt.Sprintf("image service artifact for job %s is no longer available (HTTP %d)", jobId, status),
+				agentsdk.ErrorInternal,
+				attempts,
+			)
+		}
 		return nil, recoverableJobError(jobId, "done", fmt.Errorf("artifact returned HTTP %d", status))
 	}
 	if err := validatePng(data); err != nil {
@@ -303,7 +321,7 @@ func fetchImageServiceImage(parent context.Context, jobId string) ([]byte, error
 	return data, nil
 }
 
-func curlImageService(parent context.Context, method, path string, payload any) ([]byte, int, error) {
+func requestImageService(parent context.Context, method, path string, payload any) ([]byte, int, error) {
 	var input []byte
 	if payload != nil {
 		encoded, err := json.Marshal(payload)
@@ -312,51 +330,65 @@ func curlImageService(parent context.Context, method, path string, payload any) 
 		}
 		input = encoded
 	}
-	return curlImageServiceBytes(parent, method, path, input, "")
+	return requestImageServiceBytes(parent, method, path, input, "")
 }
 
-func curlImageServiceBytes(parent context.Context, method, path string, input []byte, idempotencyKey string) ([]byte, int, error) {
-	arguments := []string{
-		"--silent", "--show-error", "--proxy", "", "--noproxy", "*",
-		"--proto", "=http", "--proto-redir", "=http", "--max-redirs", "0",
-		"--request", method, "--max-time", "60",
-		"--write-out", "\n%{http_code}",
-	}
-	if input != nil {
-		arguments = append(arguments, "--header", "Content-Type: application/json", "--data-binary", "@-")
-	}
-	if idempotencyKey != "" {
-		arguments = append(arguments, "--header", "Idempotency-Key: "+idempotencyKey)
-	}
-	arguments = append(arguments, "http://10.0.0.46:8830"+path)
+// imageServiceHTTPClient talks to the durable Mac mini image route directly
+// over Go's net/http instead of shelling out to curl. Forking a subprocess
+// (exec.Command) from this CGO-linked binary is unsafe on Darwin: crypto/x509
+// and the system DNS resolver route through CoreFoundation/Security.framework,
+// which spin up background threads that are not fork-safe. If fork() lands
+// while one of those threads holds an internal CF lock, the forked child can
+// hang forever before it ever reaches execve() - silently, with no error and
+// no syscall trace, exactly the failure mode that stalled image generation for
+// hours. A native HTTP client never calls fork(), which removes the hazard
+// entirely rather than trying to win the race.
+var imageServiceHTTPClient = &http.Client{
+	Timeout: imageRequestTimeout,
+	Transport: &http.Transport{
+		Proxy: nil, // never use a system/env proxy for the durable image route
+		DialContext: (&net.Dialer{
+			Timeout:   10 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 60 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		// IdleConnTimeout keeps the pool from retaining dead LAN routes forever.
+		IdleConnTimeout: 90 * time.Second,
+	},
+	CheckRedirect: func(request *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse // curl ran with --max-redirs 0
+	},
+}
+
+func requestImageServiceBytes(parent context.Context, method, path string, input []byte, idempotencyKey string) ([]byte, int, error) {
 	requestContext, cancel := context.WithTimeout(parent, imageRequestTimeout)
 	defer cancel()
-	command := exec.CommandContext(requestContext, "/usr/bin/curl", arguments...)
-	command.Stdin = bytes.NewReader(input)
-	var standardOutput bytes.Buffer
-	var standardError bytes.Buffer
-	command.Stdout = &standardOutput
-	command.Stderr = &standardError
-	if err := command.Run(); err != nil {
-		return nil, 0, agentsdk.NewAgentError("image service transport failed: "+standardError.String(), agentsdk.ErrorNotAvailable, nil)
+	var body io.Reader
+	if input != nil {
+		body = bytes.NewReader(input)
 	}
-	data, status, err := splitCurlOutput(standardOutput.Bytes())
+	request, err := http.NewRequestWithContext(requestContext, method, "http://10.0.0.46:8830"+path, body)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, agentsdk.NewAgentError("image service request could not be constructed: "+err.Error(), agentsdk.ErrorInternal, nil)
 	}
-	return data, status, nil
-}
-
-func splitCurlOutput(output []byte) ([]byte, int, error) {
-	separator := bytes.LastIndexByte(output, '\n')
-	if separator < 0 {
-		return nil, 0, agentsdk.NewAgentError("image service returned malformed transport metadata", agentsdk.ErrorInternal, nil)
+	if input != nil {
+		request.Header.Set("Content-Type", "application/json")
 	}
-	status, err := strconv.Atoi(string(output[separator+1:]))
+	if idempotencyKey != "" {
+		request.Header.Set("Idempotency-Key", idempotencyKey)
+	}
+	response, err := imageServiceHTTPClient.Do(request)
 	if err != nil {
-		return nil, 0, agentsdk.NewAgentError("image service returned invalid HTTP status metadata", agentsdk.ErrorInternal, nil)
+		return nil, 0, agentsdk.NewAgentError("image service transport failed: "+err.Error(), agentsdk.ErrorNotAvailable, nil)
 	}
-	return output[:separator], status, nil
+	defer response.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(response.Body, maxImageBytes+4096))
+	if err != nil {
+		return nil, 0, agentsdk.NewAgentError("image service transport failed: "+err.Error(), agentsdk.ErrorNotAvailable, nil)
+	}
+	return data, response.StatusCode, nil
 }
 
 func validatePng(data []byte) error {

@@ -32,14 +32,18 @@ func TestImageServiceOriginIsCanonicalMacMini(t *testing.T) {
 	}
 }
 
-func TestCurlImageServiceIsProxyAndRedirectImmune(t *testing.T) {
+func TestImageServiceHTTPClientIsProxyAndRedirectImmune(t *testing.T) {
 	source, err := os.ReadFile("image_codex.go")
 	if err != nil {
 		t.Fatalf("reading image service implementation: %v", err)
 	}
-	for _, argument := range []string{"--proxy", "--noproxy", "--proto", "--proto-redir", "--max-redirs"} {
-		if !strings.Contains(string(source), argument) {
-			t.Errorf("curl arguments omit %s", argument)
+	text := string(source)
+	if strings.Contains(text, "os/exec") || strings.Contains(text, "/usr/bin/curl") {
+		t.Fatal("image service must not shell out to curl (Darwin fork hang hazard)")
+	}
+	for _, needle := range []string{"Proxy: nil", "ErrUseLastResponse", "DialContext", "imageServiceHTTPClient"} {
+		if !strings.Contains(text, needle) {
+			t.Errorf("HTTP client missing %q", needle)
 		}
 	}
 }

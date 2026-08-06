@@ -1,7 +1,6 @@
 package capability
 
 import (
-	"os/exec"
 	"testing"
 )
 
@@ -43,9 +42,9 @@ func TestBuildTTSCommand_FractionalSpeed(t *testing.T) {
 }
 
 func TestSynthesizeSpeech_TTSNotInstalled(t *testing.T) {
-	if path, err := exec.LookPath("tts"); err == nil {
-		t.Fatalf("test requires the verified absent tts CLI, found %s", path)
-	}
+	// Force LookPath("tts") to fail deterministically regardless of what is
+	// actually installed on the host running this test.
+	t.Setenv("PATH", t.TempDir())
 
 	_, err := SynthesizeSpeech(t.Context(), "hello", SpeakOpts{})
 	if err == nil {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"os"
 	"strings"
 	"time"
 
@@ -64,6 +65,13 @@ func DownloadImageJob(parent context.Context, jobId, output string, transparent 
 	if err := validateOptionalImageConfig(configurations); err != nil {
 		return nil, err
 	}
+	// Prefer an already-materialized local artifact. Once the PNG is on disk the
+	// durable operation is complete even if the remote job record has expired.
+	if result, ok, err := loadCompletedLocalImage(jobId, output); err != nil {
+		return nil, err
+	} else if ok {
+		return result, nil
+	}
 	status, err := GetImageJob(parent, jobId)
 	if err != nil {
 		return nil, err
@@ -110,10 +118,24 @@ func ResumeImageJob(parent context.Context, jobId string, options ImageJobOpts) 
 	if err := agentsdk.ValidateImageTimeout(options.Timeout); err != nil {
 		return nil, err
 	}
+	// Short-circuit before any network call when the durable local artifact is
+	// already present. This unblocks recovery after the remote job record is
+	// gone (HTTP 404) or the transport path is wedged.
+	if result, ok, err := loadCompletedLocalImage(jobId, options.Output); err != nil {
+		return nil, err
+	} else if ok {
+		return result, nil
+	}
 	operationContext := durableImageContext(parent)
 	for {
 		status, err := GetImageJob(operationContext, jobId)
 		if err != nil {
+			// Remote job may have been reaped while the local PNG survived.
+			if result, ok, loadErr := loadCompletedLocalImage(jobId, options.Output); loadErr != nil {
+				return nil, loadErr
+			} else if ok {
+				return result, nil
+			}
 			if !isTransientImageError(err) {
 				return nil, err
 			}
@@ -125,16 +147,64 @@ func ResumeImageJob(parent context.Context, jobId string, options ImageJobOpts) 
 			if downloadError == nil {
 				return result, nil
 			}
+			if result, ok, loadErr := loadCompletedLocalImage(jobId, options.Output); loadErr != nil {
+				return nil, loadErr
+			} else if ok {
+				return result, nil
+			}
 			if !isTransientImageError(downloadError) {
 				return nil, downloadError
 			}
 		}
 		if status.Status == "failed" || status.Status == "cancelled" || status.Status == "canceled" {
+			// Prefer a completed local artifact over a later remote failure/cancel.
+			if result, ok, loadErr := loadCompletedLocalImage(jobId, options.Output); loadErr != nil {
+				return nil, loadErr
+			} else if ok {
+				return result, nil
+			}
 			attempts := []map[string]any{{"job_id": jobId, "status": status.Status, "recoverable": false}}
 			return nil, agentsdk.NewAgentError(fmt.Sprintf("image service job %s ended with status %s: %s", jobId, status.Status, status.Error), agentsdk.ErrorInternal, attempts)
 		}
 		<-time.After(imagePollInterval)
 	}
+}
+
+// loadCompletedLocalImage returns a ready ImageResult when output already holds
+// a validated PNG. ok=false means no usable local artifact (missing/empty/invalid).
+func loadCompletedLocalImage(jobId, output string) (*agentsdk.ImageResult, bool, error) {
+	if strings.TrimSpace(output) == "" {
+		return nil, false, nil
+	}
+	resolved, err := resolveOutputPath(output)
+	if err != nil {
+		// resolveOutputPath only fails on empty or temp-create problems; empty is handled above.
+		return nil, false, err
+	}
+	data, err := os.ReadFile(resolved)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("reading local image artifact: %w", err)
+	}
+	if err := validatePng(data); err != nil {
+		return nil, false, nil
+	}
+	configuration, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return nil, false, nil
+	}
+	provider := "codex"
+	provenance := map[string]any{
+		"id": jobId, "status": "done", "source": "local_artifact",
+		"provider": provider, "path": resolved,
+	}
+	return &agentsdk.ImageResult{
+		Path: resolved, ModelUsed: codexModelInfo, ConversationID: uuid.New(),
+		Width: configuration.Width, Height: configuration.Height, JobID: jobId,
+		Status: "done", Ready: true, Provider: provider, Provenance: provenance,
+	}, true, nil
 }
 
 func validateOptionalImageConfig(configurations []*agentsdk.Config) error {
