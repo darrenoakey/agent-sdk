@@ -185,7 +185,7 @@ class ClaudeProvider:
                 _collect_response(prompt, options),
                 timeout=timeout,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise AgentError(
                 f"claude request timed out after {timeout}s",
                 kind=ErrorKind.TIMEOUT,

@@ -1070,7 +1070,7 @@ async def _wait_for_poll(seconds: float) -> None:
     event = asyncio.Event()
     try:
         await asyncio.wait_for(event.wait(), timeout=seconds)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return
 
 

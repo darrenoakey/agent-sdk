@@ -180,7 +180,7 @@ async def _run_gemini(
             proc.communicate(prompt.encode()),
             timeout=timeout,
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         proc.kill()
         raise AgentError(
             f"gemini request timed out after {timeout}s", kind=ErrorKind.TIMEOUT

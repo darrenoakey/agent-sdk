@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import time
 
 import pytest
@@ -51,7 +50,7 @@ def test_classify_auth_api_key():
 
 
 def test_classify_timeout_asyncio():
-    assert classify_error(asyncio.TimeoutError()) == ErrorKind.TIMEOUT
+    assert classify_error(TimeoutError()) == ErrorKind.TIMEOUT
 
 
 def test_classify_timeout_builtin():
@@ -208,7 +207,7 @@ async def test_single_shot_timeout_cascades():
     async def execute(provider: str):
         calls.append(provider)
         if provider == "p1":
-            raise asyncio.TimeoutError()
+            raise TimeoutError()
         return "ok"
 
     result = await execute_with_fallback(

@@ -106,7 +106,7 @@ async def _run_codex(
             proc.communicate(prompt.encode()),
             timeout=timeout,
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         await _stop_owned_process(proc)
         raise AgentError(
             f"codex request timed out after {timeout}s", kind=ErrorKind.TIMEOUT
