@@ -9,7 +9,20 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
+
+func TestImageServiceNativeTransportLive(t *testing.T) {
+	requestContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	data, status, err := requestImageServiceBytes(requestContext, "GET", "/healthz", nil, "")
+	if err != nil {
+		t.Fatalf("native canonical image transport failed: %v", err)
+	}
+	if status != 200 || string(data) != "ok" {
+		t.Fatalf("native canonical image health response status=%d body=%q", status, data)
+	}
+}
 
 func TestGenerateImageLiveCanonical(t *testing.T) {
 	const width = 256

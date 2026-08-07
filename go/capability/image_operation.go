@@ -433,30 +433,71 @@ func completeImageOperation(parent context.Context, prompt string, options Image
 	if err != nil {
 		return nil, err
 	}
-	defer unlockImageOperation(lock)
 	_, state, err := prepareImageOperation(body, options)
 	if err != nil {
+		unlockImageOperation(lock)
 		return nil, err
 	}
-	replayed := false
-	if state.JobId == "" {
-		submission, submitError := WaitImageSubmission(parent, []byte(state.RequestBody), state.IdempotencyKey, options.Config)
-		if submitError != nil {
-			return nil, submitError
-		}
-		state.JobId = submission.JobID
-		replayed = submission.Replayed
-		if err := writeImageOperation(statePath, state); err != nil {
-			return nil, err
-		}
-	}
-	result, err := ResumeImageJob(parent, state.JobId, ImageJobOpts{Output: state.OutputPath, Transparent: state.Transparent})
-	if result != nil {
+	// Local artifact short-circuit under the lock, then release before any long wait.
+	if result, ok, loadErr := loadCompletedLocalImage(state.JobId, state.OutputPath); loadErr != nil {
+		unlockImageOperation(lock)
+		return nil, loadErr
+	} else if ok {
+		unlockImageOperation(lock)
 		result.Prompt = prompt
 		result.Width = options.Width
 		result.Height = options.Height
 		result.ConversationID = options.ConversationID
 		result.IdempotencyKey = state.IdempotencyKey
+		return result, nil
+	}
+	// Hold the flock only for state mutation. Long submit/poll/download must not
+	// pin the lock: a wedged wait would otherwise serialize every recovery attempt.
+	needSubmit := state.JobId == ""
+	jobID := state.JobId
+	outputPath := state.OutputPath
+	transparent := state.Transparent
+	idempotencyKey := state.IdempotencyKey
+	requestBody := state.RequestBody
+	unlockImageOperation(lock)
+
+	operationContext := durableImageContext(parent)
+	replayed := false
+	if needSubmit {
+		submission, submitError := WaitImageSubmission(operationContext, []byte(requestBody), idempotencyKey, options.Config)
+		if submitError != nil {
+			return nil, submitError
+		}
+		lock, err = lockImageOperation(statePath)
+		if err != nil {
+			return nil, err
+		}
+		_, state, err = prepareImageOperation(body, options)
+		if err != nil {
+			unlockImageOperation(lock)
+			return nil, err
+		}
+		if state.JobId == "" {
+			state.JobId = submission.JobID
+			if writeErr := writeImageOperation(statePath, state); writeErr != nil {
+				unlockImageOperation(lock)
+				return nil, writeErr
+			}
+		}
+		jobID = state.JobId
+		outputPath = state.OutputPath
+		transparent = state.Transparent
+		idempotencyKey = state.IdempotencyKey
+		unlockImageOperation(lock)
+		replayed = submission.Replayed
+	}
+	result, err := ResumeImageJob(operationContext, jobID, ImageJobOpts{Output: outputPath, Transparent: transparent})
+	if result != nil {
+		result.Prompt = prompt
+		result.Width = options.Width
+		result.Height = options.Height
+		result.ConversationID = options.ConversationID
+		result.IdempotencyKey = idempotencyKey
 		result.Replayed = replayed
 	}
 	return result, err
@@ -475,28 +516,62 @@ func ResumeImageOperation(parent context.Context, statePath string, configuratio
 	if err != nil {
 		return nil, err
 	}
-	defer unlockImageOperation(lock)
 	state, err := readImageOperation(resolved)
 	if err != nil {
+		unlockImageOperation(lock)
 		return nil, err
 	}
 	if state.Version != imageOperationStateVersion {
+		unlockImageOperation(lock)
 		return nil, agentsdk.NewAgentError("unsupported image operation state version", agentsdk.ErrorInvalidRequest, nil)
 	}
+	if result, ok, loadErr := loadCompletedLocalImage(state.JobId, state.OutputPath); loadErr != nil {
+		unlockImageOperation(lock)
+		return nil, loadErr
+	} else if ok {
+		unlockImageOperation(lock)
+		result.IdempotencyKey = state.IdempotencyKey
+		return result, nil
+	}
+	needSubmit := state.JobId == ""
+	jobID := state.JobId
+	outputPath := state.OutputPath
+	transparent := state.Transparent
+	idempotencyKey := state.IdempotencyKey
+	requestBody := state.RequestBody
+	unlockImageOperation(lock)
+
 	operationContext := durableImageContext(parent)
-	if state.JobId == "" {
-		submission, submitError := WaitImageSubmission(operationContext, []byte(state.RequestBody), state.IdempotencyKey)
+	if needSubmit {
+		submission, submitError := WaitImageSubmission(operationContext, []byte(requestBody), idempotencyKey, configurations...)
 		if submitError != nil {
 			return nil, submitError
 		}
-		state.JobId = submission.JobID
-		if err := writeImageOperation(resolved, state); err != nil {
+		lock, err = lockImageOperation(resolved)
+		if err != nil {
 			return nil, err
 		}
+		state, err = readImageOperation(resolved)
+		if err != nil {
+			unlockImageOperation(lock)
+			return nil, err
+		}
+		if state.JobId == "" {
+			state.JobId = submission.JobID
+			if writeErr := writeImageOperation(resolved, state); writeErr != nil {
+				unlockImageOperation(lock)
+				return nil, writeErr
+			}
+		}
+		jobID = state.JobId
+		outputPath = state.OutputPath
+		transparent = state.Transparent
+		idempotencyKey = state.IdempotencyKey
+		unlockImageOperation(lock)
 	}
-	result, err := WaitImageJob(operationContext, state.JobId, ImageJobOpts{Output: state.OutputPath, Transparent: state.Transparent})
+	result, err := WaitImageJob(operationContext, jobID, ImageJobOpts{Output: outputPath, Transparent: transparent})
 	if result != nil {
-		result.IdempotencyKey = state.IdempotencyKey
+		result.IdempotencyKey = idempotencyKey
 	}
 	return result, err
 }

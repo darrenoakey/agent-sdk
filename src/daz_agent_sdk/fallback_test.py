@@ -1,12 +1,15 @@
 from __future__ import annotations
 
-import asyncio
 import time
 
 import pytest
 
 from daz_agent_sdk.fallback import classify_error, execute_with_fallback
 from daz_agent_sdk.types import AgentError, ErrorKind
+
+
+class _SimulatedProviderError(Exception):
+    """Raised by fake `execute` callables to simulate a provider failure."""
 
 
 # ##################################################################
@@ -47,7 +50,7 @@ def test_classify_auth_api_key():
 
 
 def test_classify_timeout_asyncio():
-    assert classify_error(asyncio.TimeoutError()) == ErrorKind.TIMEOUT
+    assert classify_error(TimeoutError()) == ErrorKind.TIMEOUT
 
 
 def test_classify_timeout_builtin():
@@ -129,7 +132,7 @@ async def test_single_shot_first_fails_second_succeeds():
     async def execute(provider: str):
         calls.append(provider)
         if provider == "p1":
-            raise Exception("rate limit exceeded")
+            raise _SimulatedProviderError("rate limit exceeded")
         return f"result from {provider}"
 
     result = await execute_with_fallback(
@@ -149,7 +152,7 @@ async def test_single_shot_first_fails_second_succeeds():
 @pytest.mark.asyncio
 async def test_single_shot_all_fail_raises_agent_error():
     async def execute(provider: str):
-        raise Exception("503 service unavailable")
+        raise _SimulatedProviderError("503 service unavailable")
 
     with pytest.raises(AgentError) as exc_info:
         await execute_with_fallback(
@@ -170,7 +173,7 @@ async def test_single_shot_all_fail_agent_error_has_attempts():
 
     async def execute(provider: str):
         idx = ["p1", "p2", "p3"].index(provider)
-        raise Exception(errors[idx])
+        raise _SimulatedProviderError(errors[idx])
 
     with pytest.raises(AgentError) as exc_info:
         await execute_with_fallback(
@@ -204,7 +207,7 @@ async def test_single_shot_timeout_cascades():
     async def execute(provider: str):
         calls.append(provider)
         if provider == "p1":
-            raise asyncio.TimeoutError()
+            raise TimeoutError()
         return "ok"
 
     result = await execute_with_fallback(
@@ -221,7 +224,7 @@ async def test_single_shot_internal_error_cascades():
     async def execute(provider: str):
         calls.append(provider)
         if provider == "p1":
-            raise Exception("unexpected internal failure")
+            raise _SimulatedProviderError("unexpected internal failure")
         return "ok"
 
     result = await execute_with_fallback(
@@ -243,7 +246,7 @@ async def test_auth_error_raises_immediately():
 
     async def execute(provider: str):
         calls.append(provider)
-        raise Exception("401 Unauthorized — invalid api key")
+        raise _SimulatedProviderError("401 Unauthorized — invalid api key")
 
     with pytest.raises(AgentError) as exc_info:
         await execute_with_fallback(
@@ -261,7 +264,7 @@ async def test_invalid_request_raises_immediately():
 
     async def execute(provider: str):
         calls.append(provider)
-        raise Exception("400 bad request: schema validation failed")
+        raise _SimulatedProviderError("400 bad request: schema validation failed")
 
     with pytest.raises(AgentError) as exc_info:
         await execute_with_fallback(
@@ -283,7 +286,7 @@ async def test_conversation_backoff_first_attempt_no_delay():
     async def execute(provider: str):
         call_times.append(time.monotonic())
         if provider == "p1":
-            raise Exception("rate limit exceeded")
+            raise _SimulatedProviderError("rate limit exceeded")
         return "ok"
 
     start = time.monotonic()
@@ -319,7 +322,7 @@ async def test_conversation_backoff_respects_max():
             delays.append(now - last_time[0])
         last_time[0] = now
         if provider != "p4":
-            raise Exception("rate limit exceeded")
+            raise _SimulatedProviderError("rate limit exceeded")
         return "ok"
 
     await execute_with_fallback(
@@ -345,7 +348,7 @@ async def test_conversation_no_backoff_for_single_shot():
     async def execute(provider: str):
         call_times.append(time.monotonic())
         if provider == "p1":
-            raise Exception(
+            raise _SimulatedProviderError(
                 "connection refused"
             )  # NOT_AVAILABLE — no retry, cascades immediately
         return "ok"
@@ -396,7 +399,7 @@ async def test_logging_records_cascade():
 
     async def execute(provider: str):
         if provider == "p1":
-            raise Exception("rate limit exceeded")
+            raise _SimulatedProviderError("rate limit exceeded")
         return "ok"
 
     await execute_with_fallback(
@@ -422,7 +425,7 @@ async def test_logging_records_all_failed():
             events.append({"event": event_type, **kwargs})
 
     async def execute(provider: str):
-        raise Exception("503 service unavailable")
+        raise _SimulatedProviderError("503 service unavailable")
 
     with pytest.raises(AgentError):
         await execute_with_fallback(

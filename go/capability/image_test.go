@@ -20,11 +20,17 @@ func TestImageServiceOriginIsCanonicalMacMini(t *testing.T) {
 		t.Fatalf("reading image service implementation: %v", err)
 	}
 	text := string(source)
-	if strings.Count(text, `"http://10.0.0.46:8830"`) != 1 {
-		t.Fatalf("canonical image service literal count is not one")
+	if !strings.Contains(text, "imageServiceCanonicalOrigin") || !strings.Contains(text, `"http://10.0.0.46:8830"`) {
+		t.Fatal("canonical LAN image service origin is missing")
+	}
+	if !strings.Contains(text, "imageServiceTunnelOrigin") || !strings.Contains(text, `"http://127.0.0.1:18831"`) {
+		t.Fatal("loopback image-service-tunnel origin is missing")
+	}
+	if !strings.Contains(text, "imageServiceLocalOrigin") || !strings.Contains(text, `"http://127.0.0.1:8830"`) {
+		t.Fatal("co-located local image service origin is missing")
 	}
 	for _, forbidden := range []string{
-		"127.0.0.1", "baseUrl", "serviceUrl", "os.Hostname", "imageServiceTestOriginKey", "imageServiceOriginForContext",
+		"baseUrl", "serviceUrl", "os.Hostname", "imageServiceTestOriginKey", "imageServiceOriginForContext",
 	} {
 		if strings.Contains(text, forbidden) {
 			t.Errorf("image service implementation retains alternate-route marker %q", forbidden)
@@ -32,15 +38,41 @@ func TestImageServiceOriginIsCanonicalMacMini(t *testing.T) {
 	}
 }
 
-func TestCurlImageServiceIsProxyAndRedirectImmune(t *testing.T) {
+func TestImageServiceHTTPClientIsProxyAndRedirectImmune(t *testing.T) {
 	source, err := os.ReadFile("image_codex.go")
 	if err != nil {
 		t.Fatalf("reading image service implementation: %v", err)
 	}
-	for _, argument := range []string{"--proxy", "--noproxy", "--proto", "--proto-redir", "--max-redirs"} {
-		if !strings.Contains(string(source), argument) {
-			t.Errorf("curl arguments omit %s", argument)
+	text := string(source)
+	if strings.Contains(text, "os/exec") || strings.Contains(text, "/usr/bin/curl") {
+		t.Fatal("image service must not shell out to curl (Darwin fork hang hazard)")
+	}
+	for _, needle := range []string{"Proxy: nil", "ErrUseLastResponse", "DialContext", "imageServiceHTTPClient", "imageServiceOriginCandidates"} {
+		if !strings.Contains(text, needle) {
+			t.Errorf("HTTP client missing %q", needle)
 		}
+	}
+}
+
+func TestImageServiceHTTPTransportHonorsCancellation(t *testing.T) {
+	selectedImageServiceOrigin.Store("")
+	requestContext, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _, err := requestImageServiceBytes(requestContext, http.MethodGet, "/healthz", nil, "")
+	if err == nil || !strings.Contains(err.Error(), context.Canceled.Error()) {
+		t.Fatalf("canceled native image request returned %v", err)
+	}
+}
+
+func TestImageServiceOriginCandidatesPreferStickySelection(t *testing.T) {
+	selectedImageServiceOrigin.Store(imageServiceCanonicalOrigin)
+	t.Cleanup(func() { selectedImageServiceOrigin.Store("") })
+	candidates := imageServiceOriginCandidates()
+	if len(candidates) != 3 || candidates[0] != imageServiceCanonicalOrigin {
+		t.Fatalf("sticky candidates = %#v", candidates)
+	}
+	if candidates[1] != imageServiceTunnelOrigin || candidates[2] != imageServiceLocalOrigin {
+		t.Fatalf("fallback order = %#v", candidates)
 	}
 }
 

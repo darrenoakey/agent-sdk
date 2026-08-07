@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from pydantic import BaseModel
 
-from daz_agent_sdk.providers.arbiter import ArbiterProvider, _KNOWN_TIERS
+from daz_agent_sdk.providers.arbiter import _KNOWN_TIERS, ArbiterProvider
 from daz_agent_sdk.types import (
     AgentError,
     Capability,
@@ -15,11 +15,11 @@ from daz_agent_sdk.types import (
     Tier,
 )
 
-
 # ##################################################################
 # test model selection
-# use qwen3.6-27b as the test model.
-TEST_MODEL_ID = "qwen3.6-27b"
+# use the production semantic route so concrete model replacements do not
+# invalidate behavior coverage.
+TEST_MODEL_ID = "local-coder"
 
 
 # ##################################################################
@@ -106,11 +106,11 @@ async def test_list_models_returns_model_info_instances(
 
 
 @pytest.mark.asyncio
-async def test_list_models_includes_qwen(arbiter_tunnel_url: str) -> None:
+async def test_list_models_includes_current_qwen(arbiter_tunnel_url: str) -> None:
     provider = ArbiterProvider(base_url=arbiter_tunnel_url)
     models = await provider.list_models()
     names = {m.model_id for m in models}
-    assert "qwen3.6-27b" in names
+    assert "qwen3.6-35b" in names
 
 
 @pytest.mark.asyncio
@@ -223,7 +223,7 @@ async def test_stream_wrong_port_raises_agent_error() -> None:
 
 
 # ##################################################################
-# qwen3.6-27b — dedicated reasoning-model test
+# local-coder — dedicated reasoning-model test
 # verifies the reasoning→content fallback path with the default
 # low/free_fast/free_thinking tier model. marked slow because a cold
 # qwen load is ~10 minutes.
@@ -235,8 +235,8 @@ async def test_complete_qwen_reasoning_model(arbiter_tunnel_url: str) -> None:
     ]
     model = ModelInfo(
         provider="arbiter",
-        model_id="qwen3.6-27b",
-        display_name="Qwen3.6 27B",
+        model_id="local-coder",
+        display_name="Local Coder",
         capabilities=frozenset({Capability.TEXT, Capability.STRUCTURED}),
         tier=Tier.FREE_THINKING,
     )
@@ -260,9 +260,10 @@ def test_answer_from_message_empty_content_with_reasoning_raises_retryable() -> 
     # an interrupted generation has reasoning but no answer — that must be a
     # retryable failure, never silently handed back as the answer (observed
     # live: chain-of-thought saved as a novel section's prose).
+    import pytest as _pytest
+
     from daz_agent_sdk.providers.arbiter import _answer_from_message
     from daz_agent_sdk.types import AgentError, ErrorKind
-    import pytest as _pytest
 
     msg = {"content": "", "reasoning": "1. Analyze the user input..."}
     with _pytest.raises(AgentError) as exc_info:
@@ -286,8 +287,8 @@ async def test_complete_max_tokens_caps_output(arbiter_tunnel_url: str) -> None:
         "arbiter is unreachable through its loopback tunnel"
     )
     models = await provider.list_models()
-    target = next((m for m in models if m.model_id == "qwen3.6-27b"), None)
-    assert target is not None, "qwen3.6-27b is not registered"
+    target = next((m for m in models if m.model_id == "qwen3.6-35b"), None)
+    assert target is not None, "qwen3.6-35b is not registered"
     messages = [
         Message(
             role="user",

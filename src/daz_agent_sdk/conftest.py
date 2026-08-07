@@ -9,7 +9,6 @@ from collections.abc import Iterator
 
 import pytest
 
-
 _ARBITER_HOST = "darren@10.0.0.254"
 _ARBITER_REMOTE_PORT = 8400
 _REQUIRED_ARBITER_MODELS = {
@@ -19,9 +18,7 @@ _REQUIRED_ARBITER_MODELS = {
     "local-coder",
     "local-extract",
     "local-vision",
-    "qwen3.6-27b",
     "qwen3.6-35b",
-    "gemma4-26b",
 }
 
 
@@ -87,7 +84,7 @@ def _await_tunnel(process: subprocess.Popen[bytes], base_url: str) -> None:
         try:
             _read_arbiter_models(base_url)
             return
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - readiness poll: any failure means "not ready yet", retry
             last_error = str(exc)
             threading.Event().wait(0.1)
     raise RuntimeError(

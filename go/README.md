@@ -91,7 +91,7 @@ fmt.Println()
 
 ### Image Generation
 
-Uses only the durable Mac mini Codex image service at `http://10.0.0.46:8830`. The origin is compiled in and cannot be supplied by a caller, environment variable, host detection, or configuration. Requests use the signed system `/usr/bin/curl` transport to avoid per-binary macOS Local Network denial without introducing another route. Legacy provider, model, and step pins fail closed.
+Uses only the durable Mac mini Codex image service. The canonical origin is `http://10.0.0.46:8830`, with sticky fallback through the Auto-managed loopback tunnel `http://127.0.0.1:18831` and co-located `http://127.0.0.1:8830`. Callers cannot supply an origin, environment variable, host detection, or configuration override. The Go worker uses native HTTP (no curl/fork); Python keeps signed system curl against the same origin list. Legacy provider, model, and step pins fail closed.
 
 ```go
 import "github.com/darrenoakey/daz-agent-sdk/go/capability"

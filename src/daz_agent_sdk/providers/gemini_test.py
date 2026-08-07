@@ -9,8 +9,8 @@ import pytest
 
 from daz_agent_sdk.providers.gemini import (
     GeminiProvider,
-    _classify_error,
     _build_prompt,
+    _classify_error,
     _find_gemini_cli,
 )
 from daz_agent_sdk.types import (

@@ -14,11 +14,11 @@ import (
 	sdk "github.com/darrenoakey/daz-agent-sdk/go"
 )
 
-// testArbiterModel returns a ModelInfo for qwen3.6-27b.
+// testArbiterModel returns a ModelInfo for the stable local-coder route.
 func testArbiterModel() sdk.ModelInfo {
 	return sdk.ModelInfo{
 		Provider:             "arbiter",
-		ModelID:              "qwen3.6-27b",
+		ModelID:              "local-coder",
 		DisplayName:          "Test Arbiter Model",
 		Capabilities:         []sdk.Capability{sdk.CapabilityText, sdk.CapabilityStructured},
 		Tier:                 sdk.TierFreeThinking,
@@ -193,8 +193,8 @@ func TestArbiterListModels(t *testing.T) {
 		}
 		names[m.ModelID] = true
 	}
-	if !names["qwen3.6-27b"] {
-		t.Error("ListModels should include qwen3.6-27b")
+	if !names["qwen3.6-35b"] {
+		t.Error("ListModels should include qwen3.6-35b")
 	}
 }
 
@@ -426,7 +426,7 @@ func TestArbiterEmbedWrongPortRaisesAgentError(t *testing.T) {
 	}
 }
 
-// TestArbiterCompleteQwenReasoning exercises qwen3.6-27b and verifies
+// TestArbiterCompleteQwenReasoning exercises the local-coder semantic route and verifies
 // that the reasoning→content fallback path populates resp.Text even
 // when the model is in reasoning mode. A cold qwen load can take up to 10 minutes.
 func TestArbiterCompleteQwenReasoning(t *testing.T) {
@@ -437,8 +437,8 @@ func TestArbiterCompleteQwenReasoning(t *testing.T) {
 	}
 	model := sdk.ModelInfo{
 		Provider:             "arbiter",
-		ModelID:              "qwen3.6-27b",
-		DisplayName:          "Qwen3.6 27B",
+		ModelID:              "local-coder",
+		DisplayName:          "Local Coder",
 		Capabilities:         []sdk.Capability{sdk.CapabilityText, sdk.CapabilityStructured},
 		Tier:                 sdk.TierFreeThinking,
 		SupportsStreaming:    true,

@@ -28,8 +28,10 @@ from daz_agent_sdk.types import AgentError, ErrorKind
 
 def test_image_service_is_hard_pinned_to_canonical_macmini_origin():
     source = inspect.getsource(image_module)
-    assert source.count('"http://10.0.0.46:8830"') == 1
-    assert 'arguments.append("http://10.0.0.46:8830" + path)' in source
+    assert '_IMAGE_SERVICE_CANONICAL_ORIGIN = "http://10.0.0.46:8830"' in source
+    assert '_IMAGE_SERVICE_TUNNEL_ORIGIN = "http://127.0.0.1:18831"' in source
+    assert '_IMAGE_SERVICE_LOCAL_ORIGIN = "http://127.0.0.1:8830"' in source
+    assert "arguments.append(origin + path)" in source
     for function in vars(image_module).values():
         if callable(function):
             assert "origin" not in inspect.signature(function).parameters
@@ -52,6 +54,7 @@ def test_python_transport_is_proxy_and_redirect_immune():
         '"--max-redirs"',
     ):
         assert argument in source
+    assert "origin + path" in source
 
 
 def test_public_image_apis_reject_caller_controlled_service_url():

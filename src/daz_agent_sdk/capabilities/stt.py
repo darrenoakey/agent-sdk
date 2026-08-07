@@ -7,7 +7,6 @@ from uuid import UUID
 from daz_agent_sdk.logging_ import ConversationLogger
 from daz_agent_sdk.types import AgentError, Capability, ErrorKind, ModelInfo, Tier
 
-
 # ##################################################################
 # local stt model info
 # placeholder ModelInfo for the local whisper subprocess tool.
@@ -65,7 +64,7 @@ async def _run_subprocess(args: list[str], *, timeout: float, label: str) -> str
         )
         try:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        except asyncio.TimeoutError as exc:
+        except TimeoutError as exc:
             proc.kill()
             await proc.communicate()
             raise AgentError(

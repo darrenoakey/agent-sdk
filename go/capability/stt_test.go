@@ -2,7 +2,6 @@ package capability
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 )
@@ -54,9 +53,9 @@ func TestTranscribe_FileNotFound(t *testing.T) {
 }
 
 func TestTranscribe_WhisperNotInstalled(t *testing.T) {
-	if path, err := exec.LookPath("whisper"); err == nil {
-		t.Fatalf("test requires the verified absent whisper CLI, found %s", path)
-	}
+	// Force LookPath("whisper") to fail deterministically regardless of what
+	// is actually installed on the host running this test.
+	t.Setenv("PATH", t.TempDir())
 
 	// Create a temp file to pass the existence check
 	tmpDir := t.TempDir()

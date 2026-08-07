@@ -12,7 +12,6 @@ from daz_agent_sdk.providers.ollama import OllamaProvider
 from daz_agent_sdk.registry import get_provider, refresh_providers, resolve_model
 from daz_agent_sdk.types import Message, Tier
 
-
 # ##################################################################
 # boringstack host
 # the dedicated remote Ollama box (Darren-Boringstack).

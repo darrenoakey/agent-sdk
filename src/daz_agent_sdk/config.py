@@ -8,7 +8,6 @@ import yaml
 
 from daz_agent_sdk.types import Tier
 
-
 # default config path
 _CONFIG_PATH = Path.home() / ".daz-agent-sdk" / "config.yaml"
 

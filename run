@@ -28,7 +28,30 @@ else:
     # deploy/publish: bump version, build, upload to PyPI, install globally from PyPI
     if len(sys.argv) > 1 and sys.argv[1] in ("deploy", "publish"):
         import re
-        import keyring  # type: ignore[import-untyped]
+        import shutil
+        import glob
+        import time
+
+        def pypi_token() -> str:
+            # Headless greenline cannot use macOS keyring/security-keyring.
+            # daz-secrets is the configured non-interactive credential path.
+            try:
+                out = subprocess.check_output(
+                    ["daz-secrets", "get", "pypi", "api_token"],
+                    text=True,
+                )
+            except FileNotFoundError as exc:
+                print("ERROR: daz-secrets not found on PATH")
+                raise SystemExit(1) from exc
+            except subprocess.CalledProcessError as exc:
+                print("ERROR: daz-secrets get pypi api_token failed")
+                raise SystemExit(1) from exc
+            token = out.strip()
+            if not token:
+                print("ERROR: empty PyPI token from daz-secrets (service='pypi', account='api_token')")
+                raise SystemExit(1)
+            return token
+
 
         version_file = SCRIPT_DIR / "src" / "daz_agent_sdk" / "__init__.py"
         text = version_file.read_text()
@@ -51,20 +74,14 @@ else:
         subprocess.run([sys.executable, "-m", "pip", "install", "-q", "build", "twine"], check=True)
         for d in (SCRIPT_DIR / "dist", SCRIPT_DIR / "build"):
             if d.exists():
-                import shutil
                 shutil.rmtree(d)
         subprocess.run([sys.executable, "-m", "build"], cwd=str(SCRIPT_DIR), check=True)
 
         # upload to PyPI
-        token = keyring.get_password("pypi", "api_token")
-        if not token:
-            print("ERROR: No PyPI token in keyring (service='pypi', user='api_token')")
-            print("Add it with: python -m keyring set pypi api_token")
-            sys.exit(1)
+        token = pypi_token()
         env = os.environ.copy()
         env["TWINE_USERNAME"] = "__token__"
         env["TWINE_PASSWORD"] = token
-        import glob
         dist_files = glob.glob(str(SCRIPT_DIR / "dist" / "*"))
         subprocess.run(
             [sys.executable, "-m", "twine", "upload"] + dist_files,
@@ -73,8 +90,7 @@ else:
         )
         print(f"Published daz-agent-sdk {new_ver} to PyPI")
 
-        # install globally from PyPI
-        import time
+        # wait for index, then install globally from PyPI
         print("Waiting for PyPI to index the new version...")
         time.sleep(30)
         installed = False

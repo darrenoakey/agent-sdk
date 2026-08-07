@@ -4,8 +4,9 @@ import asyncio
 import json
 import os
 import shutil
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any, AsyncIterator, Type
+from typing import Any
 from uuid import uuid4
 
 from daz_agent_sdk.providers.base import Provider
@@ -25,7 +26,6 @@ from daz_agent_sdk.types import (
     T,
     Tier,
 )
-
 
 # ##################################################################
 # gemini models
@@ -180,7 +180,7 @@ async def _run_gemini(
             proc.communicate(prompt.encode()),
             timeout=timeout,
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         proc.kill()
         raise AgentError(
             f"gemini request timed out after {timeout}s", kind=ErrorKind.TIMEOUT
@@ -217,7 +217,7 @@ class GeminiProvider(Provider):
         messages: list[Message],
         model: ModelInfo,
         *,
-        schema: Type[T] | None = None,
+        schema: type[T] | None = None,
         tools: list[str] | None = None,
         cwd: str | Path | None = None,
         max_turns: int = 1,

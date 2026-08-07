@@ -6,11 +6,15 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"os"
+	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	agentsdk "github.com/darrenoakey/daz-agent-sdk/go"
 	"github.com/google/uuid"
+	"golang.org/x/sys/unix"
 )
 
 // ImageJobOpts controls recovery of an existing durable image job.
@@ -64,6 +68,13 @@ func DownloadImageJob(parent context.Context, jobId, output string, transparent 
 	if err := validateOptionalImageConfig(configurations); err != nil {
 		return nil, err
 	}
+	// Prefer an already-materialized local artifact. Once the PNG is on disk the
+	// durable operation is complete even if the remote job record has expired.
+	if result, ok, err := loadCompletedLocalImage(jobId, output); err != nil {
+		return nil, err
+	} else if ok {
+		return result, nil
+	}
 	status, err := GetImageJob(parent, jobId)
 	if err != nil {
 		return nil, err
@@ -110,10 +121,24 @@ func ResumeImageJob(parent context.Context, jobId string, options ImageJobOpts) 
 	if err := agentsdk.ValidateImageTimeout(options.Timeout); err != nil {
 		return nil, err
 	}
+	// Short-circuit before any network call when the durable local artifact is
+	// already present. This unblocks recovery after the remote job record is
+	// gone (HTTP 404) or the transport path is wedged.
+	if result, ok, err := loadCompletedLocalImage(jobId, options.Output); err != nil {
+		return nil, err
+	} else if ok {
+		return result, nil
+	}
 	operationContext := durableImageContext(parent)
 	for {
 		status, err := GetImageJob(operationContext, jobId)
 		if err != nil {
+			// Remote job may have been reaped while the local PNG survived.
+			if result, ok, loadErr := loadCompletedLocalImage(jobId, options.Output); loadErr != nil {
+				return nil, loadErr
+			} else if ok {
+				return result, nil
+			}
 			if !isTransientImageError(err) {
 				return nil, err
 			}
@@ -125,16 +150,87 @@ func ResumeImageJob(parent context.Context, jobId string, options ImageJobOpts) 
 			if downloadError == nil {
 				return result, nil
 			}
+			if result, ok, loadErr := loadCompletedLocalImage(jobId, options.Output); loadErr != nil {
+				return nil, loadErr
+			} else if ok {
+				return result, nil
+			}
 			if !isTransientImageError(downloadError) {
 				return nil, downloadError
 			}
 		}
 		if status.Status == "failed" || status.Status == "cancelled" || status.Status == "canceled" {
+			// Prefer a completed local artifact over a later remote failure/cancel.
+			if result, ok, loadErr := loadCompletedLocalImage(jobId, options.Output); loadErr != nil {
+				return nil, loadErr
+			} else if ok {
+				return result, nil
+			}
 			attempts := []map[string]any{{"job_id": jobId, "status": status.Status, "recoverable": false}}
 			return nil, agentsdk.NewAgentError(fmt.Sprintf("image service job %s ended with status %s: %s", jobId, status.Status, status.Error), agentsdk.ErrorInternal, attempts)
 		}
 		<-time.After(imagePollInterval)
 	}
+}
+
+// loadCompletedLocalImage returns a ready ImageResult when output already holds
+// a validated artifact in the format selected by its extension. ok=false means
+// no usable local artifact (missing, unsafe, empty, or invalid).
+func loadCompletedLocalImage(jobId, output string) (*agentsdk.ImageResult, bool, error) {
+	if strings.TrimSpace(output) == "" {
+		return nil, false, nil
+	}
+	resolved, err := resolveOutputPath(output)
+	if err != nil {
+		// resolveOutputPath only fails on empty or temp-create problems; empty is handled above.
+		return nil, false, err
+	}
+	directory, err := openImageOperationDirectory(filepath.Dir(resolved))
+	if err != nil {
+		if errors.Is(err, syscall.ENOENT) {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("opening local image artifact directory: %w", err)
+	}
+	defer directory.Close()
+	descriptor, err := unix.Openat(int(directory.Fd()), filepath.Base(resolved), unix.O_RDONLY|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		if errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ELOOP) {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("opening local image artifact: %w", err)
+	}
+	file := os.NewFile(uintptr(descriptor), resolved)
+	defer file.Close()
+	details, err := file.Stat()
+	if err != nil {
+		return nil, false, fmt.Errorf("inspecting local image artifact: %w", err)
+	}
+	statData, ok := details.Sys().(*syscall.Stat_t)
+	if !ok || statData.Uid != uint32(os.Geteuid()) {
+		return nil, false, nil
+	}
+	extension := strings.ToLower(filepath.Ext(resolved))
+	if err := validateImageOpenFile(file, extension); err != nil {
+		return nil, false, nil
+	}
+	if _, err := file.Seek(0, 0); err != nil {
+		return nil, false, fmt.Errorf("rewinding local image artifact: %w", err)
+	}
+	configuration, _, err := image.DecodeConfig(file)
+	if err != nil {
+		return nil, false, nil
+	}
+	provider := "codex"
+	provenance := map[string]any{
+		"id": jobId, "status": "done", "source": "local_artifact",
+		"provider": provider, "path": resolved,
+	}
+	return &agentsdk.ImageResult{
+		Path: resolved, ModelUsed: codexModelInfo, ConversationID: uuid.New(),
+		Width: configuration.Width, Height: configuration.Height, JobID: jobId,
+		Status: "done", Ready: true, Provider: provider, Provenance: provenance,
+	}, true, nil
 }
 
 func validateOptionalImageConfig(configurations []*agentsdk.Config) error {

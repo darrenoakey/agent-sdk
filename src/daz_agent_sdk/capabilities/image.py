@@ -6,14 +6,15 @@ import fcntl
 import hashlib
 import json
 import os
-import struct
 import stat
+import struct
 import subprocess
 import uuid
+from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from io import BytesIO
 from pathlib import Path
-from typing import Any, AsyncIterator, Sequence
+from typing import Any
 from uuid import UUID
 
 from daz_agent_sdk.config import Config
@@ -28,7 +29,6 @@ from daz_agent_sdk.types import (
     ModelInfo,
     Tier,
 )
-
 
 # ##################################################################
 # codex model info — image generation always goes through the mac mini
@@ -219,7 +219,7 @@ def _read_operation(path: Path) -> dict[str, Any]:
         raise ValueError(f"image operation state exceeds size limit: {path}")
     state = json.loads(raw)
     if not isinstance(state, dict):
-        raise ValueError(f"image operation state is not a JSON object: {path}")
+        raise TypeError(f"image operation state is not a JSON object: {path}")
     _validate_operation_state(state, path)
     return state
 
@@ -429,7 +429,7 @@ def _validate_operation_state(state: dict[str, Any], path: Path) -> None:
     except ValueError as exc:
         raise ValueError(f"image operation request body is invalid: {path}") from exc
     if not isinstance(parsed, dict):
-        raise ValueError(f"image operation request body is not an object: {path}")
+        raise TypeError(f"image operation request body is not an object: {path}")
     output_path = Path(state["output_path"])
     if not output_path.is_absolute():
         raise ValueError(f"image operation output path is not absolute: {path}")
@@ -590,6 +590,27 @@ async def _service_image(path: str) -> bytes:
     return data
 
 
+# Durable Mac mini Codex image service origins. Callers never supply one.
+# Prefer the Auto-managed loopback tunnel (macOS Local Network denial safe),
+# then a co-located listener, then the canonical LAN endpoint.
+_IMAGE_SERVICE_CANONICAL_ORIGIN = "http://10.0.0.46:8830"
+_IMAGE_SERVICE_TUNNEL_ORIGIN = "http://127.0.0.1:18831"
+_IMAGE_SERVICE_LOCAL_ORIGIN = "http://127.0.0.1:8830"
+_IMAGE_SERVICE_ORIGINS = (
+    _IMAGE_SERVICE_TUNNEL_ORIGIN,
+    _IMAGE_SERVICE_LOCAL_ORIGIN,
+    _IMAGE_SERVICE_CANONICAL_ORIGIN,
+)
+_selected_image_service_origin: str | None = None
+
+
+def _image_service_origin_candidates() -> list[str]:
+    selected = _selected_image_service_origin
+    if not selected:
+        return list(_IMAGE_SERVICE_ORIGINS)
+    return [selected, *[origin for origin in _IMAGE_SERVICE_ORIGINS if origin != selected]]
+
+
 async def _curl_image_service(
     method: str,
     path: str,
@@ -597,59 +618,72 @@ async def _curl_image_service(
     *,
     idempotency_key: str | None = None,
 ) -> tuple[bytes, int, str]:
-    arguments = [
-        "/usr/bin/curl",
-        "--silent",
-        "--show-error",
-        "--proxy",
-        "",
-        "--noproxy",
-        "*",
-        "--proto",
-        "=http",
-        "--proto-redir",
-        "=http",
-        "--max-redirs",
-        "0",
-        "--request",
-        method,
-        "--max-time",
-        "60",
-        "--write-out",
-        "\n%{http_code}\n%{content_type}",
-    ]
-    if body is not None:
-        arguments.extend(
-            ["--header", "Content-Type: application/json", "--data-binary", "@-"]
+    """Transport to the durable image service via signed system curl.
+
+    Python keeps curl because it is not the CGO-linked worker path that hangs
+    in fork(); the Go worker uses native HTTP. Origin selection prefers the
+    loopback image-service-tunnel so Local Network denial cannot wedge calls.
+    """
+    global _selected_image_service_origin
+    last_detail = "no image service origins configured"
+    for origin in _image_service_origin_candidates():
+        arguments = [
+            "/usr/bin/curl",
+            "--silent",
+            "--show-error",
+            "--proxy",
+            "",
+            "--noproxy",
+            "*",
+            "--proto",
+            "=http",
+            "--proto-redir",
+            "=http",
+            "--max-redirs",
+            "0",
+            "--request",
+            method,
+            "--max-time",
+            "60",
+            "--write-out",
+            "\n%{http_code}\n%{content_type}",
+        ]
+        if body is not None:
+            arguments.extend(
+                ["--header", "Content-Type: application/json", "--data-binary", "@-"]
+            )
+        if idempotency_key is not None:
+            arguments.extend(["--header", f"Idempotency-Key: {idempotency_key}"])
+        arguments.append(origin + path)
+        process = await asyncio.create_subprocess_exec(
+            *arguments,
+            stdin=subprocess.PIPE if body is not None else subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
         )
-    if idempotency_key is not None:
-        arguments.extend(["--header", f"Idempotency-Key: {idempotency_key}"])
-    arguments.append("http://10.0.0.46:8830" + path)
-    process = await asyncio.create_subprocess_exec(
-        *arguments,
-        stdin=subprocess.PIPE if body is not None else subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        output, error = await process.communicate(body)
+        if process.returncode != 0:
+            last_detail = error.decode("utf-8", errors="replace").strip() or f"exit {process.returncode}"
+            if _selected_image_service_origin == origin:
+                _selected_image_service_origin = None
+            continue
+        try:
+            response, status_text, content_type = output.rsplit(b"\n", 2)
+            _selected_image_service_origin = origin
+            return (
+                response,
+                int(status_text),
+                content_type.decode("utf-8", errors="replace"),
+            )
+        except (ValueError, TypeError) as exc:
+            last_detail = f"malformed transport metadata: {exc}"
+            if _selected_image_service_origin == origin:
+                _selected_image_service_origin = None
+            continue
+    raise AgentError(
+        f"image service {method} {path} transport failed: {last_detail}",
+        kind=ErrorKind.NOT_AVAILABLE,
     )
-    output, error = await process.communicate(body)
-    if process.returncode != 0:
-        detail = error.decode("utf-8", errors="replace").strip()
-        raise AgentError(
-            f"image service {method} {path} transport failed: {detail}",
-            kind=ErrorKind.NOT_AVAILABLE,
-        )
-    try:
-        response, status_text, content_type = output.rsplit(b"\n", 2)
-        return (
-            response,
-            int(status_text),
-            content_type.decode("utf-8", errors="replace"),
-        )
-    except (ValueError, TypeError) as exc:
-        raise AgentError(
-            f"image service {method} {path} returned malformed transport metadata",
-            kind=ErrorKind.INTERNAL,
-        ) from exc
 
 
 def _write_service_image(
@@ -1070,7 +1104,7 @@ async def _wait_for_poll(seconds: float) -> None:
     event = asyncio.Event()
     try:
         await asyncio.wait_for(event.wait(), timeout=seconds)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return
 
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from pathlib import Path
-from typing import Any, Protocol, Type, cast
+from typing import Any, Protocol, cast
 
 from daz_agent_sdk.capabilities.image import (
     download_image_job,
@@ -71,7 +71,7 @@ class Agent:
         prompt: str,
         *,
         tier: Tier = Tier.HIGH,
-        schema: Type[T] | None = None,
+        schema: type[T] | None = None,
         system: str | None = None,
         provider: str | None = None,
         model: str | None = None,

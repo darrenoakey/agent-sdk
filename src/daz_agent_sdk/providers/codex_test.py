@@ -11,6 +11,7 @@ from daz_agent_sdk.providers.codex import (
     CodexProvider,
     _build_prompt,
     _classify_error,
+    _parse_jsonl_response,
 )
 from daz_agent_sdk.types import (
     AgentError,
@@ -101,6 +102,38 @@ def test_build_prompt_ignores_schema() -> None:
     messages = [Message(role="user", content="test")]
     result = _build_prompt(messages)
     assert result == "test"
+
+
+# ##################################################################
+# parse jsonl response — captured codex warning and fatal error events
+def test_parse_jsonl_response_ignores_skill_budget_warning() -> None:
+    stdout = (
+        '{"type":"item.completed","item":{"id":"item_0","type":"error",'
+        '"message":"Skill descriptions were shortened to fit the 2% skills '
+        "context budget. Codex can still see every skill, but some descriptions "
+        "are shorter. Disable unused skills or plugins to leave more room for "
+        'the rest."}}\n'
+        '{"type":"item.completed","item":{"id":"item_1",'
+        '"type":"agent_message","text":"4"}}\n'
+        '{"type":"turn.completed","usage":{"input_tokens":36640,'
+        '"cached_input_tokens":35584,"output_tokens":16,'
+        '"reasoning_output_tokens":9}}'
+    )
+
+    text, usage = _parse_jsonl_response(stdout)
+
+    assert text == "4"
+    assert usage["output_tokens"] == 16
+
+
+def test_parse_jsonl_response_rejects_fatal_item_error() -> None:
+    stdout = (
+        '{"type":"item.completed","item":{"id":"item_0","type":"error",'
+        '"message":"request processing failed"}}'
+    )
+
+    with pytest.raises(AgentError, match="request processing failed"):
+        _parse_jsonl_response(stdout)
 
 
 # ##################################################################
@@ -198,7 +231,8 @@ async def test_stream_timeout_reaps_real_codex_process() -> None:
     task = asyncio.create_task(consume())
     child_pid = 0
     for _ in range(50):
-        process_list = subprocess.run(
+        process_list = await asyncio.to_thread(
+            subprocess.run,
             ["/bin/ps", "-axo", "pid=,ppid=,comm="],
             capture_output=True,
             text=True,

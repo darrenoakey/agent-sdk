@@ -16,7 +16,6 @@ from daz_agent_sdk.types import (
     Tier,
 )
 
-
 # ##################################################################
 # local tts model info
 # placeholder ModelInfo for the local tts subprocess tool.
@@ -73,13 +72,12 @@ def _build_tts_command(
 # the file is created and immediately closed so the subprocess can
 # write to it without collision.
 def _make_temp_output() -> Path:
-    tmp = tempfile.NamedTemporaryFile(
+    with tempfile.NamedTemporaryFile(
         suffix=_DEFAULT_SUFFIX,
         prefix="agent_sdk_tts_",
         delete=False,
-    )
-    tmp.close()
-    return Path(tmp.name)
+    ) as tmp:
+        return Path(tmp.name)
 
 
 # ##################################################################
@@ -95,8 +93,10 @@ async def _run_subprocess(args: list[str], *, timeout: float, label: str) -> Non
             stderr=asyncio.subprocess.PIPE,
         )
         try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        except asyncio.TimeoutError as exc:
+            _stdout, stderr = await asyncio.wait_for(
+                proc.communicate(), timeout=timeout
+            )
+        except TimeoutError as exc:
             proc.kill()
             await proc.communicate()
             raise AgentError(

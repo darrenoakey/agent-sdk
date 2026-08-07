@@ -6,9 +6,11 @@ from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
+from pydantic import BaseModel
 
 from daz_agent_sdk.providers.ollama import OllamaProvider, _tier_from_param_size
 from daz_agent_sdk.types import (
+    AgentError,
     Capability,
     ErrorKind,
     Message,
@@ -16,10 +18,7 @@ from daz_agent_sdk.types import (
     Response,
     StructuredResponse,
     Tier,
-    AgentError,
 )
-from pydantic import BaseModel
-
 
 TEST_MODEL_ID = "local-protocol:latest"
 

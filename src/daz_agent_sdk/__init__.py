@@ -1,7 +1,5 @@
-__version__ = "0.2.20"
+__version__ = "0.2.21"
 
-from daz_agent_sdk.conversation import Conversation
-from daz_agent_sdk.core import Agent
 from daz_agent_sdk.capabilities.image import (
     download_image_job,
     get_image_job,
@@ -9,6 +7,8 @@ from daz_agent_sdk.capabilities.image import (
     resume_image_operation,
     submit_image_job,
 )
+from daz_agent_sdk.conversation import Conversation
+from daz_agent_sdk.core import Agent
 from daz_agent_sdk.types import (
     AgentError,
     AudioResult,

@@ -5,7 +5,7 @@ import json
 import shutil
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any, Type
+from typing import Any
 from uuid import uuid4
 
 from daz_agent_sdk.providers.base import Provider
@@ -41,6 +41,14 @@ _CODEX_MODELS = [
         supports_tools=True,
     ),
 ]
+
+_NONFATAL_ITEM_ERROR_MESSAGES = {
+    (
+        "Skill descriptions were shortened to fit the 2% skills context budget. "
+        "Codex can still see every skill, but some descriptions are shorter. "
+        "Disable unused skills or plugins to leave more room for the rest."
+    )
+}
 
 
 # ##################################################################
@@ -106,7 +114,7 @@ async def _run_codex(
             proc.communicate(prompt.encode()),
             timeout=timeout,
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         await _stop_owned_process(proc)
         raise AgentError(
             f"codex request timed out after {timeout}s", kind=ErrorKind.TIMEOUT
@@ -148,7 +156,10 @@ def _parse_jsonl_response(stdout: str) -> tuple[str, dict[str, Any]]:
                     text_parts.append(text)
             elif item.get("type") == "error":
                 error_msg = item.get("message", "unknown error")
-                raise AgentError(error_msg, kind=_classify_error(Exception(error_msg)))
+                if error_msg not in _NONFATAL_ITEM_ERROR_MESSAGES:
+                    raise AgentError(
+                        error_msg, kind=_classify_error(Exception(error_msg))
+                    )
         elif event_type == "turn.completed":
             usage = event.get("usage", {})
         elif event_type == "turn.failed":
@@ -190,7 +201,7 @@ class CodexProvider(Provider):
         messages: list[Message],
         model: ModelInfo,
         *,
-        schema: Type[T] | None = None,
+        schema: type[T] | None = None,
         tools: list[str] | None = None,
         cwd: str | Path | None = None,
         max_turns: int = 1,

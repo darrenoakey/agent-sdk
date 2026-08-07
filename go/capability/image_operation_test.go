@@ -1,8 +1,12 @@
 package capability
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/png"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -154,4 +158,51 @@ func runImageOperationProcess(t *testing.T, body, outputPath, statePath, action 
 	}
 	t.Fatalf("image operation process returned no state: %s", output)
 	return imageOperationState{}
+}
+
+func TestResumeImageOperationShortCircuitsOnLocalArtifact(t *testing.T) {
+	directory := t.TempDir()
+	if err := os.Chmod(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(directory, "artifact.png")
+	writeOperationTestPNG(t, output, 20, 10)
+	statePath := filepath.Join(directory, "state.json")
+	body := []byte(`{"prompt":"x","width":20,"height":10}`)
+	intent := "path:" + output
+	key := "short-circuit-key"
+	state := imageOperationState{
+		Version:        imageOperationStateVersion,
+		OperationId:    imageOperationId(body, intent, key),
+		IdempotencyKey: key,
+		JobId:          "short-circuit-job",
+		RequestBody:    string(body),
+		OutputIntent:   intent,
+		OutputPath:     output,
+		OutputFormat:   "png",
+	}
+	if err := writeImageOperation(statePath, state); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	result, err := ResumeImageOperation(ctx, statePath)
+	if err != nil {
+		t.Fatalf("operation short-circuit failed: %v", err)
+	}
+	if result.Path != output || result.IdempotencyKey != key || result.JobID != "short-circuit-job" {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+}
+
+func writeOperationTestPNG(t *testing.T, path string, width, height int) {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	var buffer bytes.Buffer
+	if err := png.Encode(&buffer, img); err != nil {
+		t.Fatalf("encode png: %v", err)
+	}
+	if err := os.WriteFile(path, buffer.Bytes(), 0o600); err != nil {
+		t.Fatalf("write png: %v", err)
+	}
 }

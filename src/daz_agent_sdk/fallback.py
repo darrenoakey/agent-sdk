@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Callable, Coroutine, Protocol
+from collections.abc import Callable, Coroutine
+from typing import Any, Protocol
 
 from daz_agent_sdk.config import Config
 from daz_agent_sdk.types import AgentError, ErrorKind

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import AsyncIterator, Type
 from uuid import uuid4
 
 import pytest
@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from daz_agent_sdk.conversation import Conversation
 from daz_agent_sdk.providers.base import Provider
-from daz_agent_sdk.registry import _provider_cache, _model_cache
+from daz_agent_sdk.registry import _model_cache, _provider_cache
 from daz_agent_sdk.types import (
     Capability,
     ImageResult,
@@ -62,7 +62,7 @@ class InProcessProvider(Provider):
         messages: list[Message],
         model: ModelInfo,
         *,
-        schema: Type[T] | None = None,
+        schema: type[T] | None = None,
         tools=None,
         cwd=None,
         max_turns: int = 1,
@@ -77,7 +77,7 @@ class InProcessProvider(Provider):
             try:
                 data = json.loads(text)
                 parsed = schema(**data)
-            except Exception:
+            except Exception:  # noqa: BLE001 - fake provider: any parse/schema failure means "unparseable"
                 parsed = None
             return StructuredResponse(
                 text=text,

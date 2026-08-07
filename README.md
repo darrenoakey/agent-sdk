@@ -146,7 +146,7 @@ async with agent.conversation("brainstorm") as chat:
 
 ### Generate Images
 
-Still-image generation and editing use only the durable Mac mini Codex image service at `http://10.0.0.46:8830`. The origin is hard-pinned and caller overrides are not accepted. HTTP uses the signed system `/usr/bin/curl` transport so macOS Local Network privacy cannot selectively deny an unsigned Python child while still preserving the one fixed origin. The SDK submits one `/jobs` request, polls that job, and verifies the returned PNG. It never falls back to Spark, Flux, Ollama, Gemini, or direct OpenAI image APIs.
+Still-image generation and editing use only the durable Mac mini Codex image service. The canonical origin is `http://10.0.0.46:8830`, with sticky fallback through the Auto-managed loopback tunnel `http://127.0.0.1:18831` and co-located `http://127.0.0.1:8830`. Caller overrides are not accepted. Go uses native HTTP; Python uses signed system curl against the same origin list so macOS Local Network privacy cannot wedge either path. The SDK submits one `/jobs` request, polls that job, and verifies the returned PNG. It never falls back to Spark, Flux, Ollama, Gemini, or direct OpenAI image APIs.
 
 ```python
 result = await agent.image(

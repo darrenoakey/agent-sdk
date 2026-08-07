@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import AsyncIterator, Type
 from uuid import uuid4
 
 import pytest
@@ -29,7 +29,6 @@ from daz_agent_sdk.types import (
     Tier,
 )
 
-
 # ##################################################################
 # helpers
 # concrete in-process provider for exercising registry behavior
@@ -49,7 +48,7 @@ class RegistryProvider(Provider):
         messages: list[Message],
         model: ModelInfo,
         *,
-        schema: Type[T] | None = None,
+        schema: type[T] | None = None,
         tools: list[str] | None = None,
         cwd: str | Path | None = None,
         max_turns: int = 1,
@@ -261,7 +260,7 @@ def test_load_provider_passes_base_url_from_config():
     config = Config(providers={"boringstack": {"base_url": "http://custom-host:9999"}})
     provider = _load_provider("boringstack", config)
     assert provider is not None
-    assert getattr(provider, "_base_url") == "http://custom-host:9999"
+    assert getattr(provider, "_base_url") == "http://custom-host:9999"  # noqa: B009 - Provider base class does not declare this attribute
 
 
 # ##################################################################
