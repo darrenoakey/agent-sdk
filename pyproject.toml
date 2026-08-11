@@ -53,4 +53,5 @@ venv = ".venv"
 asyncio_default_fixture_loop_scope = "function"
 markers = [
     "real_igs: release-only canary against the canonical durable Mac mini image service",
+    "live: tests that require a real Arbiter GPU service on the LAN (too slow for the 300s gate)",
 ]

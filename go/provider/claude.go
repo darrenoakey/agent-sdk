@@ -61,12 +61,37 @@ var claudeModels = []sdk.ModelInfo{
 // and structured output. Uses the ambient Claude subscription login —
 // no API key required.
 type ClaudeProvider struct {
-	permissionMode string
+	permissionMode      string
+	nativeToolsDisabled bool
 }
 
 // NewClaudeProvider returns a new ClaudeProvider with bypassPermissions mode.
 func NewClaudeProvider() *ClaudeProvider {
 	return &ClaudeProvider{permissionMode: "bypassPermissions"}
+}
+
+// ClaudeProviderOption configures optional Claude CLI behavior.
+type ClaudeProviderOption func(*ClaudeProvider)
+
+// NewClaudeProviderWithOptions returns a ClaudeProvider with explicit CLI options.
+// Unspecified behavior matches NewClaudeProvider.
+func NewClaudeProviderWithOptions(options ...ClaudeProviderOption) *ClaudeProvider {
+	provider := NewClaudeProvider()
+	for _, option := range options {
+		if option == nil {
+			continue
+		}
+		option(provider)
+	}
+	return provider
+}
+
+// WithClaudeNativeToolsDisabled prevents the Claude CLI from exposing its native tools.
+// This is useful when tools are rendered into a text-only protocol by the caller.
+func WithClaudeNativeToolsDisabled() ClaudeProviderOption {
+	return func(provider *ClaudeProvider) {
+		provider.nativeToolsDisabled = true
+	}
 }
 
 // Name returns "claude".
@@ -182,6 +207,44 @@ func classifyClaudeError(err error) sdk.ErrorKind {
 	return sdk.ErrorInternal
 }
 
+func (c *ClaudeProvider) baseCommandArgs(system string, model sdk.ModelInfo, maxTurns int) []string {
+	args := []string{"--output-format", "stream-json", "--verbose"}
+	if system != "" {
+		args = append(args, "--system-prompt", system)
+	}
+	if model.ModelID != "claude-opus-4-6" {
+		args = append(args, "--model", model.ModelID)
+	}
+	args = append(args, "--permission-mode", c.permissionMode)
+	if c.nativeToolsDisabled {
+		args = append(args, "--tools", "")
+	}
+	return append(args, "--max-turns", fmt.Sprint(maxTurns))
+}
+
+func (c *ClaudeProvider) completeCommandArgs(system, prompt string, model sdk.ModelInfo, opts sdk.CompleteOpts) ([]string, error) {
+	maxTurns := opts.MaxTurns
+	if maxTurns < 1 {
+		maxTurns = 1
+	}
+	if opts.Schema != nil && maxTurns < 2 {
+		maxTurns = 2
+	}
+	args := c.baseCommandArgs(system, model, maxTurns)
+	if opts.Schema != nil {
+		schemaBytes, err := json.Marshal(opts.Schema)
+		if err != nil {
+			return nil, fmt.Errorf("marshaling schema: %w", err)
+		}
+		args = append(args, "--json-schema", string(schemaBytes))
+	}
+	return append(args, "-p", prompt), nil
+}
+
+func (c *ClaudeProvider) streamCommandArgs(system, prompt string, model sdk.ModelInfo) []string {
+	return append(c.baseCommandArgs(system, model, 1), "-p", prompt)
+}
+
 // Complete sends a prompt to the claude CLI and collects the full response.
 // Uses ambient subscription login — no API key needed.
 func (c *ClaudeProvider) Complete(ctx context.Context, messages []sdk.Message, model sdk.ModelInfo, opts sdk.CompleteOpts) (*sdk.Response, error) {
@@ -199,35 +262,10 @@ func (c *ClaudeProvider) Complete(ctx context.Context, messages []sdk.Message, m
 
 	system, prompt := buildPrompt(messages)
 
-	// Build command
-	args := []string{"--output-format", "stream-json", "--verbose"}
-	if system != "" {
-		args = append(args, "--system-prompt", system)
+	args, err := c.completeCommandArgs(system, prompt, model, opts)
+	if err != nil {
+		return nil, sdk.NewAgentError(err.Error(), sdk.ErrorInvalidRequest, nil)
 	}
-	if model.ModelID != "claude-opus-4-6" {
-		args = append(args, "--model", model.ModelID)
-	}
-	args = append(args, "--permission-mode", c.permissionMode)
-	maxTurns := opts.MaxTurns
-	if maxTurns < 1 {
-		maxTurns = 1
-	}
-	if opts.Schema != nil && maxTurns < 2 {
-		maxTurns = 2
-	}
-	args = append(args, "--max-turns", fmt.Sprint(maxTurns))
-
-	// Structured output via --json-schema
-	if opts.Schema != nil {
-		schemaBytes, err := json.Marshal(opts.Schema)
-		if err != nil {
-			return nil, sdk.NewAgentError(fmt.Sprintf("marshaling schema: %v", err), sdk.ErrorInvalidRequest, nil)
-		}
-		args = append(args, "--json-schema", string(schemaBytes))
-	}
-
-	// Pass prompt via -p flag
-	args = append(args, "-p", prompt)
 
 	cmd := exec.CommandContext(ctx, cliPath, args...)
 	cmd.Env = stripClaudeCodeEnv()
@@ -330,16 +368,7 @@ func (c *ClaudeProvider) Stream(ctx context.Context, messages []sdk.Message, mod
 
 	system, prompt := buildPrompt(messages)
 
-	args := []string{"--output-format", "stream-json", "--verbose"}
-	if system != "" {
-		args = append(args, "--system-prompt", system)
-	}
-	if model.ModelID != "claude-opus-4-6" {
-		args = append(args, "--model", model.ModelID)
-	}
-	args = append(args, "--permission-mode", c.permissionMode)
-	args = append(args, "--max-turns", "1")
-	args = append(args, "-p", prompt)
+	args := c.streamCommandArgs(system, prompt, model)
 
 	cmd := exec.CommandContext(ctx, cliPath, args...)
 	cmd.Env = stripClaudeCodeEnv()

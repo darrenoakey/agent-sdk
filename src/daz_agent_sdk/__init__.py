@@ -1,4 +1,4 @@
-__version__ = "0.2.21"
+__version__ = "0.2.22"
 
 from daz_agent_sdk.capabilities.image import (
     download_image_job,

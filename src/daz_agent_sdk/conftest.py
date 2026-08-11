@@ -110,6 +110,17 @@ def _stop_tunnel(process: subprocess.Popen[bytes]) -> None:
 
 
 # ##################################################################
+# auto-mark any test that consumes the real-Arbiter fixture so the
+# greenline release gate can skip them (they talk to a GPU host over
+# ssh and may exceed the 300s gate budget even when healthy).
+@pytest.hookimpl(tryfirst=True)
+def pytest_collection_modifyitems(config, items):
+    for item in items:
+        if "arbiter_tunnel_url" in getattr(item, "fixturenames", ()):
+            item.add_marker(pytest.mark.live)
+
+
+# ##################################################################
 # arbiter tunnel fixture
 # provide every live Arbiter test one verified loopback-only real service route
 @pytest.fixture(scope="session")

@@ -123,7 +123,7 @@ run_phase python-dependencies "$python_bin" -m pip check
 run_phase python-lint "$python_bin" -m ruff check src
 run_phase python-types "$python_bin" -m pyright src/daz_agent_sdk
 run_phase python-tests "$python_bin" -m pytest -q -W error -rA --junitxml "$work_root/python-tests.xml" \
-    -m "not real_igs" src
+    -m "not real_igs and not live" src
 run_phase python-tests-outcomes validate_pytest_xml "$work_root/python-tests.xml"
 
 if rg -n 'Capability\.IMAGE|async def (generate_)?image|def (generate_)?image' \

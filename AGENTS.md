@@ -12,6 +12,10 @@ No previous sessions found.
 - The SDK always dials the single canonical Mac mini IGS origin `http://10.0.0.46:8830`. No caller, host detection, environment variable, tunnel, or configuration may select another still-image service origin.
 - A release is not verified by a successful PyPI upload alone. Exercise `generate_image` against the real service and validate the resulting image dimensions/format before publishing or pinning the version downstream.
 
+## Test partitions
+
+- The default Go gate must be deterministic and network-free. Any test that calls a real model provider or CLI belongs in a `//go:build live` test file; `go test -tags=live -run '^$' ./...` must still compile the live partition.
+
 <!-- >>> greenline >>> -->
 ## Greenline gate — how merges work here
 

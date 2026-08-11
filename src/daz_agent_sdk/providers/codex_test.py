@@ -166,6 +166,7 @@ async def test_list_models() -> None:
 
 # ##################################################################
 # integration tests — call real codex CLI
+@pytest.mark.live
 @pytest.mark.asyncio
 async def test_complete_simple() -> None:
     provider = CodexProvider()
@@ -181,6 +182,7 @@ async def test_complete_simple() -> None:
     assert resp.turn_id is not None
 
 
+@pytest.mark.live
 @pytest.mark.asyncio
 async def test_complete_structured() -> None:
     """Structured output via file-based extraction — codex returns text, SDK parses it."""
@@ -197,6 +199,7 @@ async def test_complete_structured() -> None:
     assert result.parsed.answer == 15
 
 
+@pytest.mark.live
 @pytest.mark.asyncio
 async def test_stream_simple() -> None:
     provider = CodexProvider()
@@ -213,6 +216,7 @@ async def test_stream_simple() -> None:
     assert "4" in full
 
 
+@pytest.mark.live
 @pytest.mark.asyncio
 async def test_stream_timeout_reaps_real_codex_process() -> None:
     provider = CodexProvider()
