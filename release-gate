@@ -33,7 +33,20 @@ run_phase() {
         return 0
     else
         phase_status=$?
-        sed -n '1,240p' "$log_path"
+        # A head-only dump hides the failure whenever the phase is chatty:
+        # `go test -json` emits thousands of lines and the failing test is
+        # always near the end. Print both ends, and for a Go JSON stream also
+        # pull out the failing test names so the cause survives truncation.
+        printf '%s\n' "--- $phase_name: first 80 lines ---"
+        sed -n '1,80p' "$log_path"
+        printf '%s\n' "--- $phase_name: last 200 lines ---"
+        tail -n 200 "$log_path"
+        if grep -q '"Action":"fail"' "$log_path" 2>/dev/null; then
+            printf '%s\n' "--- $phase_name: failing tests ---"
+            grep '"Action":"fail"' "$log_path" | sed -n '1,60p'
+            printf '%s\n' "--- $phase_name: failure output ---"
+            grep -E '"Output":".*(FAIL|Error|error|panic)' "$log_path" | sed -n '1,80p'
+        fi
         return "$phase_status"
     fi
 }
