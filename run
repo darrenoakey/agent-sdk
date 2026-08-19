@@ -90,11 +90,20 @@ else:
         )
         print(f"Published daz-agent-sdk {new_ver} to PyPI")
 
-        # wait for index, then install globally from PyPI
+        # Wait for PyPI's index/CDN to propagate the new release before
+        # verifying installability. This is a real, observed eventual-
+        # consistency lag (not a build/upload problem): 2026-08-19 saw a
+        # successful publish of 0.2.25 take longer than a 90s total budget
+        # (30s sleep + 12x5s retries) to become pip-installable, which made
+        # greenline treat a genuinely-published release as a deploy failure
+        # and roll main back — leaving PyPI ahead of git and poisoning the
+        # next deploy's version bump with an already-published version.
+        # Budget generously: 30s initial sleep + up to 10 minutes of retries.
         print("Waiting for PyPI to index the new version...")
         time.sleep(30)
         installed = False
-        for attempt in range(1, 13):
+        attempts = 60
+        for attempt in range(1, attempts + 1):
             result = subprocess.run(
                 ["pip", "install", "--upgrade", f"daz-agent-sdk=={new_ver}"],
                 check=False,
@@ -102,9 +111,11 @@ else:
             if result.returncode == 0:
                 installed = True
                 break
-            if attempt < 12:
-                print(f"PyPI has not indexed {new_ver} yet; retrying in 5 seconds ({attempt}/12)...")
-                time.sleep(5)
+            if attempt < attempts:
+                print(
+                    f"PyPI has not indexed {new_ver} yet; retrying in 10 seconds ({attempt}/{attempts})..."
+                )
+                time.sleep(10)
         if not installed:
             print(f"ERROR: Published daz-agent-sdk {new_ver}, but could not install it from PyPI")
             sys.exit(1)
