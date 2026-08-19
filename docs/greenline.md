@@ -16,6 +16,23 @@ greenline submit                     # gate: squash-merge -> check -> ff main ->
 greenline done                       # remove the worktree + branch once merged
 ```
 
+### `greenline submit` must never be held inside an agent turn
+
+A submit is minutes of `check` + a real `deploy`. An agent that runs `greenline
+submit` in the foreground, or polls it in a busy-wait loop, burns its whole
+wall-clock budget waiting and gets killed mid-gate — leaving a stale lock
+holder and an unmerged branch. Every agent submit MUST be detached:
+
+1. Launch `greenline submit` as a background/detached process from the
+   worktree (e.g. `nohup greenline submit >log 2>&1 </dev/null & disown`, or
+   the daemon's gate-job API if available) so it keeps running independent of
+   the current turn.
+2. Call the `sleep` tool for the expected duration and end the turn — never
+   foreground-wait or poll in a loop.
+3. On wake, read the verdict from `greenline status` (journal + `deployed`
+   SHA) or the submit's log file; only resubmit if the journal shows a real
+   failure, never merely because the wait finished.
+
 Diagnostics (no lock needed):
 
 ```
