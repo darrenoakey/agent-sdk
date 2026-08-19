@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from daz_agent_sdk.providers.codex import (
     CodexProvider,
     _build_prompt,
     _classify_error,
+    _find_codex_cli,
     _parse_jsonl_response,
 )
 from daz_agent_sdk.types import (
@@ -141,6 +143,12 @@ def test_parse_jsonl_response_rejects_fatal_item_error() -> None:
 def test_provider_name() -> None:
     provider = CodexProvider()
     assert provider.name == "codex"
+
+
+def test_find_codex_cli_outside_path() -> None:
+    restricted_path = "/usr/bin:/bin:/usr/sbin:/sbin"
+    assert shutil.which("codex", path=restricted_path) is None
+    assert _find_codex_cli(restricted_path) == "/opt/homebrew/bin/codex"
 
 
 @pytest.mark.asyncio

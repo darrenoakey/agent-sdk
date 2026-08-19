@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shutil
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -52,6 +53,32 @@ _NONFATAL_ITEM_ERROR_MESSAGES = {
 
 
 # ##################################################################
+# find codex cli
+# locate the executable even when a non-login process lacks Homebrew
+# and user package directories on PATH
+def _find_codex_cli(search_path: str | None = None) -> str | None:
+    executable = shutil.which("codex", path=search_path)
+    if executable is not None:
+        return executable
+    home = Path.home()
+    candidates = (
+        Path("/opt/homebrew/bin/codex"),
+        Path("/usr/local/bin/codex"),
+        home / ".npm-global/bin/codex",
+        home / ".local/bin/codex",
+        home / "node_modules/.bin/codex",
+    )
+    return next(
+        (
+            str(candidate)
+            for candidate in candidates
+            if candidate.is_file() and os.access(candidate, os.X_OK)
+        ),
+        None,
+    )
+
+
+# ##################################################################
 # classify error
 # map codex CLI error messages to agent-sdk ErrorKind for fallback decisions
 def _classify_error(err: Exception) -> ErrorKind:
@@ -93,10 +120,10 @@ def _build_prompt(messages: list[Message]) -> str:
 # run codex subprocess
 # pipe prompt to stdin, return (stdout, stderr, returncode)
 async def _run_codex(
-    prompt: str, model_id: str, timeout: float
+    executable: str, prompt: str, model_id: str, timeout: float
 ) -> tuple[str, str, int]:
     proc = await asyncio.create_subprocess_exec(
-        "codex",
+        executable,
         "exec",
         "-",
         "--json",
@@ -183,7 +210,7 @@ class CodexProvider(Provider):
     # available
     # returns True if the codex CLI is on PATH
     async def available(self) -> bool:
-        return shutil.which("codex") is not None
+        return _find_codex_cli() is not None
 
     # ##################################################################
     # list models
@@ -209,7 +236,8 @@ class CodexProvider(Provider):
         timeout: float = 300.0,
         setting_sources: list[str] | tuple[str, ...] | None = None,
     ) -> Response | StructuredResponse:
-        if shutil.which("codex") is None:
+        executable = _find_codex_cli()
+        if executable is None:
             raise AgentError("codex CLI not found", kind=ErrorKind.NOT_AVAILABLE)
 
         prompt = _build_prompt(messages)
@@ -224,7 +252,7 @@ class CodexProvider(Provider):
 
         try:
             stdout, stderr, returncode = await _run_codex(
-                prompt, model.model_id, timeout
+                executable, prompt, model.model_id, timeout
             )
         except AgentError:
             raise
@@ -280,7 +308,8 @@ class CodexProvider(Provider):
         *,
         timeout: float = 300.0,
     ) -> AsyncIterator[str]:
-        if shutil.which("codex") is None:
+        executable = _find_codex_cli()
+        if executable is None:
             raise AgentError("codex CLI not found", kind=ErrorKind.NOT_AVAILABLE)
 
         proc: asyncio.subprocess.Process | None = None
@@ -289,7 +318,7 @@ class CodexProvider(Provider):
             async with asyncio.timeout(timeout):
                 prompt = _build_prompt(messages)
                 proc = await asyncio.create_subprocess_exec(
-                    "codex",
+                    executable,
                     "exec",
                     "-",
                     "--json",
