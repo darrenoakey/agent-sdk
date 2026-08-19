@@ -27,10 +27,13 @@ else:
 
     # deploy/publish: bump version, build, upload to PyPI, install globally from PyPI
     if len(sys.argv) > 1 and sys.argv[1] in ("deploy", "publish"):
+        import json
         import re
         import shutil
         import glob
         import time
+        import urllib.error
+        import urllib.request
 
         def pypi_token() -> str:
             # Headless greenline cannot use macOS keyring/security-keyring.
@@ -52,6 +55,33 @@ else:
                 raise SystemExit(1)
             return token
 
+        def published_version() -> tuple[int, int, int] | None:
+            # The git-committed __init__.py version drifts behind PyPI by
+            # design: this script never commits its own bump, so any deploy
+            # that runs after a successful one — or after a rollback whose
+            # PyPI publish had actually succeeded — recomputes the SAME
+            # already-published version from the stale file and gets a 400
+            # from twine (observed three times in a row on 2026-08-19).
+            # Ask PyPI what is really live and bump from that instead of
+            # trusting local git state, so the version number self-heals
+            # regardless of git/PyPI drift.
+            try:
+                with urllib.request.urlopen(
+                    "https://pypi.org/pypi/daz-agent-sdk/json", timeout=10
+                ) as resp:
+                    data = json.load(resp)
+            except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError):
+                return None
+            releases = data.get("releases", {})
+            best: tuple[int, int, int] | None = None
+            for raw in releases:
+                pm = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", raw)
+                if not pm:
+                    continue
+                candidate = (int(pm.group(1)), int(pm.group(2)), int(pm.group(3)))
+                if best is None or candidate > best:
+                    best = candidate
+            return best
 
         version_file = SCRIPT_DIR / "src" / "daz_agent_sdk" / "__init__.py"
         text = version_file.read_text()
@@ -59,7 +89,15 @@ else:
         if not m:
             print("ERROR: version not found in __init__.py")
             sys.exit(1)
-        maj, minor, patch = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        local_ver = (int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        pypi_ver = published_version()
+        base_ver = max(local_ver, pypi_ver) if pypi_ver is not None else local_ver
+        if pypi_ver is not None and pypi_ver > local_ver:
+            print(
+                f"Local version {'.'.join(map(str, local_ver))} is behind "
+                f"PyPI's published {'.'.join(map(str, pypi_ver))}; bumping from PyPI."
+            )
+        maj, minor, patch = base_ver
         new_ver = f"{maj}.{minor}.{patch + 1}"
         text = re.sub(
             r'^(__version__ = ["\'])\d+\.\d+\.\d+(["\'])',
