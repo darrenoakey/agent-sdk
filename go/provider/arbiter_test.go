@@ -99,9 +99,6 @@ func stopArbiterTunnel(t *testing.T, command *exec.Cmd) {
 }
 
 func TestKnownArbiterTiers(t *testing.T) {
-	if knownArbiterTiers["qwen3.6-27b"] != sdk.TierSummaries {
-		t.Errorf("qwen3.6-27b should be Summaries")
-	}
 	if knownArbiterTiers["local-chat"] != sdk.TierFreeFast {
 		t.Errorf("local-chat should be FreeFast")
 	}
@@ -117,11 +114,17 @@ func TestKnownArbiterTiers(t *testing.T) {
 	if knownArbiterTiers["local-vision"] != sdk.TierFreeThinking {
 		t.Errorf("local-vision should be FreeThinking")
 	}
+	if knownArbiterTiers["qwen3.8-27b"] != sdk.TierFreeThinking {
+		t.Errorf("qwen3.8-27b should map to FreeThinking")
+	}
 	if knownArbiterTiers["qwen3.6-35b"] != sdk.TierFreeThinking {
 		t.Errorf("qwen3.6-35b should still map to FreeThinking (back-compat)")
 	}
-	if knownArbiterTiers["gemma4-26b"] != sdk.TierFreeThinking {
-		t.Errorf("gemma4-26b should still map to FreeThinking (back-compat)")
+	if knownArbiterTiers["nemotron-30b-a3b"] != sdk.TierFreeFast {
+		t.Errorf("nemotron-30b-a3b should be FreeFast")
+	}
+	if knownArbiterTiers["ornith-1.5-35b"] != sdk.TierFreeThinking {
+		t.Errorf("ornith-1.5-35b should be FreeThinking")
 	}
 }
 
@@ -193,8 +196,11 @@ func TestArbiterListModels(t *testing.T) {
 		}
 		names[m.ModelID] = true
 	}
-	if !names["qwen3.6-35b"] {
-		t.Error("ListModels should include qwen3.6-35b")
+	if !names["nemotron-30b-a3b"] {
+		t.Error("ListModels should include nemotron-30b-a3b")
+	}
+	if !names["ornith-1.5-35b"] {
+		t.Error("ListModels should include ornith-1.5-35b")
 	}
 }
 

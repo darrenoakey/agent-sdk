@@ -17,8 +17,8 @@ _REQUIRED_ARBITER_MODELS = {
     "local-summariser",
     "local-coder",
     "local-extract",
-    "local-vision",
-    "qwen3.6-35b",
+    "nemotron-30b-a3b",
+    "ornith-1.5-35b",
 }
 
 

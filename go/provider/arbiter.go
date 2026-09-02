@@ -26,11 +26,11 @@ var knownArbiterTiers = map[string]sdk.Tier{
 	"local-coder":      sdk.TierFreeThinking,
 	"local-extract":    sdk.TierFreeThinking,
 	"local-vision":     sdk.TierFreeThinking,
-	"qwen3.6-27b":      sdk.TierSummaries,
+	"nemotron-30b-a3b": sdk.TierFreeFast,
+	"ornith-1.5-35b":   sdk.TierFreeThinking,
+	"qwen3.8-27b":      sdk.TierFreeThinking,
 	"qwen3.6-35b":      sdk.TierFreeThinking,
 	"gpt-oss-20b":      sdk.TierFreeFast,
-	"gemma4-31b":       sdk.TierFreeThinking,
-	"gemma4-26b":       sdk.TierFreeThinking,
 }
 
 // ArbiterProvider speaks the OpenAI-compatible /v1/chat/completions

@@ -35,11 +35,11 @@ _KNOWN_TIERS: dict[str, Tier] = {
     "local-coder": Tier.FREE_THINKING,
     "local-extract": Tier.FREE_THINKING,
     "local-vision": Tier.FREE_THINKING,
-    "qwen3.6-27b": Tier.SUMMARIES,
+    "nemotron-30b-a3b": Tier.FREE_FAST,
+    "ornith-1.5-35b": Tier.FREE_THINKING,
+    "qwen3.8-27b": Tier.FREE_THINKING,
     "qwen3.6-35b": Tier.FREE_THINKING,
     "gpt-oss-20b": Tier.FREE_FAST,
-    "gemma4-31b": Tier.FREE_THINKING,
-    "gemma4-26b": Tier.FREE_THINKING,
 }
 
 

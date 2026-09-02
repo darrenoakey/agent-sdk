@@ -39,8 +39,12 @@ def _make_model(model_id: str = TEST_MODEL_ID) -> ModelInfo:
 # ##################################################################
 # known tiers — unit tests (no arbiter required)
 # verify the hardcoded tier mapping covers the registered llm_names.
-def test_known_tiers_contains_qwen() -> None:
-    assert _KNOWN_TIERS["qwen3.6-27b"] == Tier.SUMMARIES
+def test_known_tiers_contains_nemotron() -> None:
+    assert _KNOWN_TIERS["nemotron-30b-a3b"] == Tier.FREE_FAST
+
+
+def test_known_tiers_contains_ornith() -> None:
+    assert _KNOWN_TIERS["ornith-1.5-35b"] == Tier.FREE_THINKING
 
 
 def test_known_tiers_maps_category_aliases() -> None:
@@ -54,8 +58,8 @@ def test_known_tiers_maps_category_aliases() -> None:
 def test_known_tiers_keeps_concrete_model_backcompat() -> None:
     # concrete arbiter model IDs must still resolve to their historical tiers
     # even after the category-alias migration.
+    assert _KNOWN_TIERS["qwen3.8-27b"] == Tier.FREE_THINKING
     assert _KNOWN_TIERS["qwen3.6-35b"] == Tier.FREE_THINKING
-    assert _KNOWN_TIERS["gemma4-26b"] == Tier.FREE_THINKING
     assert _KNOWN_TIERS["gpt-oss-20b"] == Tier.FREE_FAST
 
 
@@ -106,11 +110,12 @@ async def test_list_models_returns_model_info_instances(
 
 
 @pytest.mark.asyncio
-async def test_list_models_includes_current_qwen(arbiter_tunnel_url: str) -> None:
+async def test_list_models_includes_current_models(arbiter_tunnel_url: str) -> None:
     provider = ArbiterProvider(base_url=arbiter_tunnel_url)
     models = await provider.list_models()
     names = {m.model_id for m in models}
-    assert "qwen3.6-35b" in names
+    assert "nemotron-30b-a3b" in names
+    assert "ornith-1.5-35b" in names
 
 
 @pytest.mark.asyncio
@@ -287,8 +292,8 @@ async def test_complete_max_tokens_caps_output(arbiter_tunnel_url: str) -> None:
         "arbiter is unreachable through its loopback tunnel"
     )
     models = await provider.list_models()
-    target = next((m for m in models if m.model_id == "qwen3.6-35b"), None)
-    assert target is not None, "qwen3.6-35b is not registered"
+    target = next((m for m in models if m.model_id == "qwen3.8-27b"), None)
+    assert target is not None, "qwen3.8-27b is not registered"
     messages = [
         Message(
             role="user",

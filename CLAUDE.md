@@ -47,7 +47,7 @@ Provider-agnostic AI library with tier-based routing and automatic fallback.
 - **Codex** — wraps `codex` CLI. Uses ChatGPT auth. No `OPENAI_API_KEY`.
 - **Gemini text** — wraps `gemini` CLI. Uses Google auth. No `GEMINI_API_KEY` for text.
 - **Ollama** — local HTTP, no auth at all.
-- **Arbiter** — spark arbiter HTTP, no auth. The arbiter is the GPU job server on the spark machine (GB10 CUDA, 128 GB unified mem) at `10.0.0.254:8400`. Its `/v1/chat/completions` endpoint is OpenAI-compatible and proxies to vLLM-served LLMs via semantic categories: `local-chat`, `local-summariser`, `local-coder`, `local-extract`, `local-vision`. Concrete model IDs (`qwen3.6-27b`, `qwen3.6-35b`, `gemma4-31b`, `gemma4-26b`) remain valid for back-compat.
+- **Arbiter** — spark arbiter HTTP, no auth. The arbiter is the GPU job server on the spark machine (GB10 CUDA, 128 GB unified mem) at `10.0.0.254:8400`. Its `/v1/chat/completions` endpoint is OpenAI-compatible and proxies to vLLM-served LLMs via semantic categories: `local-chat`/`local-extract`/`local-summariser` (Nemotron 3.5 Lightning, `nemotron-30b-a3b`) and `local-coder` (Ornith 1.5 MLX MTP, `ornith-1.5-35b`). The retired concrete IDs `qwen3.6-27b` and `gemma4-26b` are no longer used; concrete IDs such as `qwen3.6-35b` and `gemma4-31b` remain valid for back-compat where still registered.
 
 The Go OpenAI provider uses `OPENAI_API_KEY` because it calls the API directly (no codex CLI wrapper in Go). This is the one text provider exception in Go.
 

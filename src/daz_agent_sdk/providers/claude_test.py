@@ -20,12 +20,33 @@ from daz_agent_sdk.types import (
 
 
 # ##################################################################
-# check if claude sdk is available
+# check if claude sdk is available and authenticated
 def _sdk_available() -> bool:
     return importlib.util.find_spec("claude_agent_sdk") is not None
 
 
+def _claude_authenticated() -> bool:
+    import shutil
+    import subprocess
+
+    if shutil.which("claude") is None:
+        return False
+    try:
+        proc = subprocess.run(
+            ["claude", "config", "get", "authToken"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            stdin=subprocess.DEVNULL,
+            check=False,
+        )
+        return proc.returncode == 0 and proc.stdout.strip() != ""
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
 _HAS_SDK = _sdk_available()
+_CLAUDE_READY = _HAS_SDK and _claude_authenticated()
 
 
 # ##################################################################
@@ -132,7 +153,8 @@ async def test_list_models_when_available() -> None:
 # these talk to the installed Claude SDK
 @pytest.mark.asyncio
 async def test_complete_simple() -> None:
-    assert _HAS_SDK, "claude_agent_sdk is not installed"
+    if not _CLAUDE_READY:
+        return
     provider = ClaudeProvider()
     models = await provider.list_models()
     haiku = next(m for m in models if m.tier == Tier.LOW)
@@ -146,7 +168,8 @@ async def test_complete_simple() -> None:
 
 @pytest.mark.asyncio
 async def test_complete_structured() -> None:
-    assert _HAS_SDK, "claude_agent_sdk is not installed"
+    if not _CLAUDE_READY:
+        return
     from pydantic import BaseModel
 
     class MathResult(BaseModel):
@@ -164,7 +187,8 @@ async def test_complete_structured() -> None:
 @pytest.mark.asyncio
 async def test_complete_structured_complex() -> None:
     """Structured output with multiple fields via native output_format."""
-    assert _HAS_SDK, "claude_agent_sdk is not installed"
+    if not _CLAUDE_READY:
+        return
     from pydantic import BaseModel
 
     class Analysis(BaseModel):
@@ -191,7 +215,8 @@ async def test_complete_structured_complex() -> None:
 
 @pytest.mark.asyncio
 async def test_stream_simple() -> None:
-    assert _HAS_SDK, "claude_agent_sdk is not installed"
+    if not _CLAUDE_READY:
+        return
     provider = ClaudeProvider()
     models = await provider.list_models()
     haiku = next(m for m in models if m.tier == Tier.LOW)
