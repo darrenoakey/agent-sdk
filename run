@@ -114,6 +114,7 @@ else:
             )
         maj, minor, patch = base_ver
         new_ver = f"{maj}.{minor}.{patch + 1}"
+        original_text = text
         text = re.sub(
             r'^(__version__ = ["\'])\d+\.\d+\.\d+(["\'])',
             rf"\g<1>{new_ver}\g<2>",
@@ -133,7 +134,6 @@ else:
             # canonical checkout, and a dirty __init__.py there blocks every
             # later greenline submit ("canonical checkout is DIRTY", seen
             # twice on 2026-09-04). PyPI is the version of record.
-            original_text = text
             version_file.write_text(text)
             print(f"Version bumped to {new_ver}")
             try:
@@ -156,9 +156,20 @@ else:
                 env=env,
                 check=True,
             )
-            published = release_files(new_ver)
+            # PyPI's edge cache serves the pre-upload 404 for this release
+            # URL for a while after the upload is accepted (2026-09-04: 0.2.33
+            # was live at 23:25:15, still 404 at 23:25:35). Wait, bounded,
+            # until PyPI itself lists both files: that is the publish proof,
+            # and it also means greenline's health re-run of this script sees
+            # the release and does not upload it a second time.
+            published: list[str] = []
+            for _ in range(20):
+                published = release_files(new_ver)
+                if len(published) >= 2:
+                    break
+                time.sleep(5)
             if len(published) < 2:
-                print(f"ERROR: twine returned success but PyPI lists {published} for {new_ver}")
+                print(f"ERROR: twine returned success but PyPI lists {published} for {new_ver} after 100 s")
                 sys.exit(1)
             print(f"Published daz-agent-sdk {new_ver} to PyPI: {', '.join(published)}")
 
