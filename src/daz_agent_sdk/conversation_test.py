@@ -40,6 +40,7 @@ class InProcessProvider(Provider):
         self._response = response
         self._responses = responses or []
         self._call_count = 0
+        self.max_tokens_seen: list[int | None] = []
 
     # ##################################################################
     # available
@@ -70,6 +71,7 @@ class InProcessProvider(Provider):
         timeout: float = 120.0,
         setting_sources: list[str] | tuple[str, ...] | None = None,
     ) -> Response | StructuredResponse:
+        self.max_tokens_seen.append(max_tokens)
         text = self._next_response()
         conv_id = uuid4()
         turn_id = uuid4()
@@ -386,3 +388,27 @@ async def test_multiple_turns():
     assert hist[4].content == "question3"
     assert hist[5].role == "assistant"
     assert hist[5].content == "answer3"
+
+
+# ##################################################################
+# test say forwards max tokens
+# the conversation-level budget reaches the provider on every say(), a
+# per-call value overrides it, and no budget at all sends None (server
+# default) rather than an invented number.
+@pytest.mark.asyncio
+async def test_say_forwards_max_tokens():
+    provider = InProcessProvider(response="ok")
+    _provider_cache["inprocess"] = provider
+    _model_cache["inprocess:v1"] = _inprocess_model()
+    conv = Conversation(
+        name="budget", tier=Tier.HIGH, provider="inprocess", model="v1", max_tokens=16384
+    )
+    async with conv as chat:
+        await chat.say("first")
+        await chat.say("second", max_tokens=512)
+    assert provider.max_tokens_seen == [16384, 512]
+
+    unbudgeted = _make_conversation(response="ok")
+    async with unbudgeted as chat:
+        await chat.say("plain")
+    assert _provider_cache["inprocess"].max_tokens_seen == [None]

@@ -175,6 +175,7 @@ class Agent:
         provider: str | None = None,
         model: str | None = None,
         mcp_servers: dict[str, Any] | None = None,
+        max_tokens: int | None = None,
     ) -> Conversation:
         return Conversation(
             name=name,
@@ -184,6 +185,7 @@ class Agent:
             model=model,
             config=self._config,
             mcp_servers=mcp_servers,
+            max_tokens=max_tokens,
         )
 
     # ##################################################################

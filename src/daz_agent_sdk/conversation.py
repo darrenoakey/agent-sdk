@@ -47,6 +47,7 @@ class Conversation:
         model: str | None = None,
         config: Config | None = None,
         mcp_servers: dict[str, Any] | None = None,
+        max_tokens: int | None = None,
     ) -> None:
         self._name = name
         self._tier = tier
@@ -55,6 +56,10 @@ class Conversation:
         self._model_id = model
         self._config = config
         self._mcp_servers = mcp_servers
+        # completion budget forwarded to every say(); reasoning models spend
+        # this budget on thinking BEFORE the answer, so a server default (the
+        # arbiter injects 4096) can crowd a long structured answer out entirely.
+        self._max_tokens = max_tokens
         self._history: list[Message] = []
         self._logger: ConversationLogger | None = None
         self._conversation_id: UUID | None = None
@@ -101,8 +106,10 @@ class Conversation:
         tier: Tier | None = None,
         timeout: float = 3600.0,
         max_turns: int = 10000,
+        max_tokens: int | None = None,
     ) -> Response | StructuredResponse:
         effective_tier = tier if tier is not None else self._tier
+        effective_max_tokens = max_tokens if max_tokens is not None else self._max_tokens
         self._history.append(Message(role="user", content=content))
         messages = list(self._history)
 
@@ -120,6 +127,8 @@ class Conversation:
             "timeout": timeout,
             "max_turns": max_turns,
         }
+        if effective_max_tokens is not None:
+            kwargs["max_tokens"] = effective_max_tokens
         if self._mcp_servers is not None:
             kwargs["mcp_servers"] = self._mcp_servers
 
