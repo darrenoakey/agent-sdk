@@ -28,11 +28,14 @@ run_phase() {
     phase_name=$1
     shift
     log_path="$work_root/$phase_name.log"
-    printf '%s\n' "$phase_name"
+    start_ts=$(date +%s)
+    printf '%s' "$phase_name"
     if "$@" >"$log_path" 2>&1; then
+        printf ' %ss\n' "$(( $(date +%s) - start_ts ))"
         return 0
     else
         phase_status=$?
+        printf ' %ss FAILED\n' "$(( $(date +%s) - start_ts ))"
         # A head-only dump hides the failure whenever the phase is chatty:
         # `go test -json` emits thousands of lines and the failing test is
         # always near the end. Print both ends, and for a Go JSON stream also
@@ -152,17 +155,18 @@ if rg -n 'CapabilityImage|func .*Image' go/provider >"$work_root/go-image-route-
 fi
 printf '%s\n' image-route-scan
 
-go_cache="$work_root/go-build"
-mkdir -p "$go_cache"
+# Keep the host GOCACHE (typically go-build-agentd3-gate). The previous
+# per-run mktemp GOCACHE forced a cold compile on every gate.
 cd "$project_root/go"
 run_phase go-format sh -c 'files=$(gofmt -l .); test -z "$files"'
-run_phase go-vet env GOCACHE="$go_cache" go vet ./...
-run_phase go-tests env GOCACHE="$go_cache" go test -json -p 1 -count=1 ./...
+run_phase go-vet go vet ./...
+run_phase go-tests go test -json -count=1 -timeout 60s ./...
 if rg -n '"Action":"skip"' "$work_root/go-tests.log"; then
     printf '%s\n' "go release tests reported an unexpected skip" >&2
     exit 1
 fi
-run_phase go-build env GOCACHE="$go_cache" go build -o "$work_root/agent-sdk" ./cmd/agent-sdk
+run_phase go-live-compile go test -tags=live -run '^$' ./...
+run_phase go-build go build -o "$work_root/agent-sdk" ./cmd/agent-sdk
 
 cd "$project_root"
 # Gate canaries must finish under greenline's hard 5-minute check cap.
@@ -170,9 +174,12 @@ cd "$project_root"
 # Mac mini can still reach the co-located service natively. Full image
 # generation remains covered by the live_igs / real_igs tests outside the gate
 # budget and by production image workflows.
+# Compile the live_igs healthz binary for the Mac mini (x86_64) and reuse it
+# remotely instead of shipping the Go tree for a cold remote compile. Local
+# healthz stays native so the laptop does not need Rosetta.
 cd "$project_root/go"
-run_phase real-local-go-igs-healthz env GOCACHE="$go_cache" go test -tags=live_igs -count=1 \
-    -run '^TestImageServiceNativeTransportLive$' ./capability
+run_phase real-local-go-igs-healthz go test -tags=live_igs -count=1 -run '^TestImageServiceNativeTransportLive$' ./capability
+run_phase go-igs-healthz-binary env CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go test -c -o "$work_root/igs-healthz.test" -tags=live_igs -count=1 ./capability
 cd "$project_root"
 run_phase real-local-python-igs-healthz "$python_bin" - <<'PY'
 import asyncio
@@ -201,11 +208,8 @@ case "$remote_root" in
         exit 1
         ;;
 esac
-run_phase stage-go-source tar -cf "$work_root/go-source.tar" go
-run_phase copy-go-source scp -q -o BatchMode=yes -o ConnectTimeout=10 \
-    "$work_root/go-source.tar" "$remote_host:$remote_root/go-source.tar"
-run_phase extract-go-source ssh -o BatchMode=yes -o ConnectTimeout=10 "$remote_host" \
-    "tar -xf $remote_root/go-source.tar -C $remote_root"
+run_phase copy-igs-binary scp -q -o BatchMode=yes -o ConnectTimeout=10 \
+    "$work_root/igs-healthz.test" "$remote_host:$remote_root/igs-healthz.test"
 run_phase real-remote-go-igs-healthz ssh -o BatchMode=yes -o ConnectTimeout=10 "$remote_host" \
-    "cd $remote_root/go && go test -tags=live_igs -count=1 -run '^TestImageServiceNativeTransportLive$' ./capability"
+    "chmod +x $remote_root/igs-healthz.test && $remote_root/igs-healthz.test -test.run '^TestImageServiceNativeTransportLive$' -test.count=1"
 printf '%s\n' "release gate passed"
