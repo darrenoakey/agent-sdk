@@ -33,6 +33,7 @@ from daz_agent_sdk.types import (
     StructuredResponse,
     T,
     Tier,
+    validate_reasoning_effort,
 )
 
 
@@ -78,6 +79,7 @@ class Agent:
         timeout: float = 300.0,
         max_turns: int = 1,
         max_tokens: int | None = None,
+        reasoning_effort: str | None = None,
         tools: list[str] | None = None,
         cwd: str | Path | None = None,
         setting_sources: list[str] | tuple[str, ...] | None = None,
@@ -91,6 +93,10 @@ class Agent:
             complete_extra["setting_sources"] = list(setting_sources)
         if max_tokens is not None:
             complete_extra["max_tokens"] = max_tokens
+        if reasoning_effort is not None:
+            complete_extra["reasoning_effort"] = validate_reasoning_effort(
+                reasoning_effort
+            )
         messages: list[Message] = []
         if system is not None:
             messages.append(Message(role="system", content=system))
@@ -176,6 +182,7 @@ class Agent:
         model: str | None = None,
         mcp_servers: dict[str, Any] | None = None,
         max_tokens: int | None = None,
+        reasoning_effort: str | None = None,
     ) -> Conversation:
         return Conversation(
             name=name,
@@ -186,6 +193,7 @@ class Agent:
             config=self._config,
             mcp_servers=mcp_servers,
             max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort,
         )
 
     # ##################################################################

@@ -222,9 +222,15 @@ class GeminiProvider(Provider):
         cwd: str | Path | None = None,
         max_turns: int = 1,
         max_tokens: int | None = None,
+        reasoning_effort: str | None = None,
         timeout: float = 300.0,
         setting_sources: list[str] | tuple[str, ...] | None = None,
     ) -> Response | StructuredResponse:
+        if reasoning_effort is not None:
+            raise AgentError(
+                f"gemini provider cannot control reasoning effort (got {reasoning_effort!r})",
+                kind=ErrorKind.INVALID_REQUEST,
+            )
         _ = setting_sources
         if _find_gemini_cli() is None:
             raise AgentError("gemini CLI not found", kind=ErrorKind.NOT_AVAILABLE)

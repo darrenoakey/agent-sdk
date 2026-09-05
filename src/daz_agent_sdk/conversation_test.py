@@ -41,6 +41,7 @@ class InProcessProvider(Provider):
         self._responses = responses or []
         self._call_count = 0
         self.max_tokens_seen: list[int | None] = []
+        self.reasoning_seen: list[str | None] = []
 
     # ##################################################################
     # available
@@ -68,10 +69,12 @@ class InProcessProvider(Provider):
         cwd=None,
         max_turns: int = 1,
         max_tokens: int | None = None,
+        reasoning_effort: str | None = None,
         timeout: float = 120.0,
         setting_sources: list[str] | tuple[str, ...] | None = None,
     ) -> Response | StructuredResponse:
         self.max_tokens_seen.append(max_tokens)
+        self.reasoning_seen.append(reasoning_effort)
         text = self._next_response()
         conv_id = uuid4()
         turn_id = uuid4()
@@ -401,7 +404,11 @@ async def test_say_forwards_max_tokens():
     _provider_cache["inprocess"] = provider
     _model_cache["inprocess:v1"] = _inprocess_model()
     conv = Conversation(
-        name="budget", tier=Tier.HIGH, provider="inprocess", model="v1", max_tokens=16384
+        name="budget",
+        tier=Tier.HIGH,
+        provider="inprocess",
+        model="v1",
+        max_tokens=16384,
     )
     async with conv as chat:
         await chat.say("first")
@@ -412,3 +419,40 @@ async def test_say_forwards_max_tokens():
     async with unbudgeted as chat:
         await chat.say("plain")
     assert _provider_cache["inprocess"].max_tokens_seen == [None]
+
+
+# ##################################################################
+# reasoning_effort reaches the provider on every say(), a per-call value
+# overrides the conversation default, an unknown value is rejected before
+# any request is made, and no value at all sends None (model default).
+@pytest.mark.asyncio
+async def test_say_forwards_reasoning_effort():
+    provider = InProcessProvider(response="ok")
+    _provider_cache["inprocess"] = provider
+    _model_cache["inprocess:v1"] = _inprocess_model()
+    conv = Conversation(
+        name="think",
+        tier=Tier.HIGH,
+        provider="inprocess",
+        model="v1",
+        reasoning_effort="none",
+    )
+    async with conv as chat:
+        await chat.say("first")
+        await chat.say("second", reasoning_effort="high")
+        with pytest.raises(ValueError, match="reasoning_effort must be one of"):
+            await chat.say("third", reasoning_effort="lots")
+    assert provider.reasoning_seen == ["none", "high"]
+    with pytest.raises(ValueError, match="reasoning_effort must be one of"):
+        Conversation(
+            name="bad",
+            tier=Tier.HIGH,
+            provider="inprocess",
+            model="v1",
+            reasoning_effort="off",
+        )
+
+    plain = _make_conversation(response="ok")
+    async with plain as chat:
+        await chat.say("plain")
+    assert _provider_cache["inprocess"].reasoning_seen == [None]

@@ -20,6 +20,7 @@ from daz_agent_sdk.types import (
     T,
     Tier,
     parse_json_from_llm,
+    validate_reasoning_effort,
     validate_structured_json,
 )
 
@@ -189,6 +190,7 @@ class ArbiterProvider(Provider):
         cwd: str | Path | None = None,
         max_turns: int = 1,
         max_tokens: int | None = None,
+        reasoning_effort: str | None = None,
         timeout: float = 900.0,
         setting_sources: list[str] | tuple[str, ...] | None = None,
     ) -> Response | StructuredResponse:
@@ -225,6 +227,11 @@ class ArbiterProvider(Provider):
         # long prose mid-sentence once a big prompt provokes long thinking.
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
+        # the arbiter forwards the body verbatim to the serving engine; Ollama's
+        # OpenAI route maps reasoning_effort "none" to think=false, which is
+        # what makes response_format enforceable on a reasoning model.
+        if reasoning_effort is not None:
+            payload["reasoning_effort"] = validate_reasoning_effort(reasoning_effort)
         if schema is not None:
             payload["response_format"] = {
                 "type": "json_schema",

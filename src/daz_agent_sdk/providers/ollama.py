@@ -20,6 +20,7 @@ from daz_agent_sdk.types import (
     T,
     Tier,
     parse_json_from_llm,
+    validate_reasoning_effort,
     validate_structured_json,
 )
 
@@ -169,6 +170,7 @@ class OllamaProvider(Provider):
         cwd: str | Path | None = None,
         max_turns: int = 1,
         max_tokens: int | None = None,
+        reasoning_effort: str | None = None,
         timeout: float = 300.0,
         setting_sources: list[str] | tuple[str, ...] | None = None,
     ) -> Response | StructuredResponse:
@@ -203,6 +205,9 @@ class OllamaProvider(Provider):
         }
         if max_tokens is not None:
             payload["options"] = {"num_predict": max_tokens}
+        if reasoning_effort is not None:
+            effort = validate_reasoning_effort(reasoning_effort)
+            payload["think"] = False if effort == "none" else effort
         if schema is not None:
             payload["format"] = schema.model_json_schema()
 

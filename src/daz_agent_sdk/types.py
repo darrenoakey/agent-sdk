@@ -42,6 +42,26 @@ class Capability(Enum):
 # ##################################################################
 # error kind
 # classifies errors for fallback decision making
+# ##################################################################
+# reasoning effort
+# how much a reasoning model may think before answering. "none" turns
+# thinking off entirely: for a structured-JSON answer that is the difference
+# between a valid object in seconds and a thinking transcript that crowds the
+# answer out (nemotron via Ollama, 2026-09-04). Providers that cannot control
+# reasoning REJECT a value rather than ignore it.
+REASONING_EFFORTS = ("none", "low", "medium", "high")
+
+
+def validate_reasoning_effort(value: str | None) -> str | None:
+    if value is None:
+        return None
+    if value not in REASONING_EFFORTS:
+        raise ValueError(
+            f"reasoning_effort must be one of {REASONING_EFFORTS}, got {value!r}"
+        )
+    return value
+
+
 class ErrorKind(Enum):
     RATE_LIMIT = "rate_limit"
     AUTH = "auth"

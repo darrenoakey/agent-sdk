@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import time
+
 import pytest
 from pydantic import BaseModel
 
@@ -309,3 +312,57 @@ async def test_complete_max_tokens_caps_output(arbiter_tunnel_url: str) -> None:
         assert len((result.text or "").split()) < 200
     except AgentError as exc:
         assert "no answer content" in str(exc)
+
+
+# ##################################################################
+# reasoning_effort="none" + schema — a reasoning model's structured answer
+# must be the JSON object itself, produced without a thinking transcript.
+# Live: nemotron through the arbiter (Ollama on boringstack),
+# which with thinking on spends minutes and emits malformed JSON (2026-09-04).
+class _Bounds(BaseModel):
+    index: int
+    framing: str
+    face_slot: str
+
+
+class _BoundsAnswer(BaseModel):
+    boundary_images: list[_Bounds]
+
+
+@pytest.mark.asyncio
+async def test_complete_reasoning_none_with_schema_returns_pure_json(
+    arbiter_tunnel_url: str,
+) -> None:
+    provider = ArbiterProvider(base_url=arbiter_tunnel_url)
+    assert await provider.available(), (
+        "arbiter is unreachable through its loopback tunnel"
+    )
+    models = await provider.list_models()
+    target = next((m for m in models if m.model_id == "nemotron-30b-a3b"), None)
+    assert target is not None, "nemotron-30b-a3b is not registered"
+    messages = [
+        Message(
+            role="user",
+            content=(
+                'Return JSON only: {"boundary_images": [...]} holding exactly 3 objects '
+                "for indices 0..2, each with index, framing (CU, MCU or MS) and face_slot "
+                "(left, center or right)."
+            ),
+        )
+    ]
+    started = time.monotonic()
+    result = await provider.complete(
+        messages,
+        target,
+        timeout=300.0,
+        max_tokens=2048,
+        reasoning_effort="none",
+        schema=_BoundsAnswer,
+    )
+    elapsed = time.monotonic() - started
+    assert isinstance(result, StructuredResponse)
+    assert [row.index for row in result.parsed.boundary_images] == [0, 1, 2]
+    # the text IS the object: no thinking prose before it
+    assert result.text.lstrip().startswith("{")
+    json.loads(result.text)
+    assert elapsed < 120, f"no-think structured answer took {elapsed:.0f}s"

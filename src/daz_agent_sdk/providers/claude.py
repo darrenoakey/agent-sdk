@@ -152,10 +152,16 @@ class ClaudeProvider:
         cwd: str | Path | None = None,
         max_turns: int = 1,
         max_tokens: int | None = None,
+        reasoning_effort: str | None = None,
         timeout: float = 300.0,
         mcp_servers: dict[str, Any] | None = None,
         setting_sources: list[str] | tuple[str, ...] | None = None,
     ) -> Response | StructuredResponse:
+        if reasoning_effort is not None:
+            raise AgentError(
+                f"claude provider cannot control reasoning effort (got {reasoning_effort!r})",
+                kind=ErrorKind.INVALID_REQUEST,
+            )
         prompt = _build_prompt(messages)
         output_format: dict[str, Any] | None = None
         effective_max_turns = max_turns
