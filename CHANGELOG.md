@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `Conversation.rewind(exchanges=1)`: drop the trailing user/assistant exchange(s) so a caller that rejected an answer can retry without the rejected text in context; raises when nothing is left to drop.
+
 - `reasoning_effort` ("none" | "low" | "medium" | "high") on `Agent.ask`, `Agent.conversation` and `Conversation.say`. Arbiter forwards it as OpenAI `reasoning_effort` (Ollama maps "none" to think=false, which makes `response_format` enforceable on reasoning models); Ollama sets `think`; claude/codex/gemini reject a value instead of ignoring it.
 - Move live Arbiter GPU/SSH tests behind `//go:build live` so the default Go gate stays network-free. Stop pointing GOCACHE at a per-run temp dir, cap untagged `go test` at 60s, and ship a Darwin/amd64 IGS healthz binary to the Intel Mac mini instead of cold-compiling the Go tree remotely.
 

@@ -217,6 +217,25 @@ class Conversation:
         return self._tier
 
     # ##################################################################
+    # rewind
+    # drop the most recent exchange(s) from history: the trailing user
+    # message and, when the provider answered, its assistant reply. A
+    # caller that rejected an answer (schema-valid but semantically wrong)
+    # uses this so the retry is NOT conditioned on the rejected text -
+    # models copy their own earlier answers out of the context far more
+    # readily than they follow a corrective nudge. Raises when there is
+    # no exchange left to drop: silently rewinding nothing hides a bug.
+    def rewind(self, exchanges: int = 1) -> None:
+        if exchanges < 1:
+            raise ValueError(f"rewind needs at least one exchange, got {exchanges}")
+        for _ in range(exchanges):
+            if self._history and self._history[-1].role == "assistant":
+                self._history.pop()
+            if not self._history or self._history[-1].role != "user":
+                raise ValueError("no exchange left to rewind")
+            self._history.pop()
+
+    # ##################################################################
     # fork
     # create a new Conversation with a copy of the current history.
     # changes to the fork do not affect the original.

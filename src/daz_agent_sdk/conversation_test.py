@@ -456,3 +456,34 @@ async def test_say_forwards_reasoning_effort():
     async with plain as chat:
         await chat.say("plain")
     assert _provider_cache["inprocess"].reasoning_seen == [None]
+
+
+# ##################################################################
+# rewind
+@pytest.mark.asyncio
+async def test_rewind_drops_the_last_exchange_and_the_next_say_omits_it() -> None:
+    conv = _make_conversation(responses=["first", "second"], system="sys")
+    await conv.say("q1")
+    assert [m.role for m in conv.history] == ["system", "user", "assistant"]
+    conv.rewind()
+    assert [m.role for m in conv.history] == ["system"]
+    await conv.say("q2")
+    assert [(m.role, m.content) for m in conv.history] == [
+        ("system", "sys"),
+        ("user", "q2"),
+        ("assistant", "second"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_rewind_drops_a_dangling_user_message_and_refuses_an_empty_history() -> (
+    None
+):
+    conv = _make_conversation(response="only")
+    conv._history.append(Message(role="user", content="never answered"))
+    conv.rewind()
+    assert conv.history == []
+    with pytest.raises(ValueError, match="no exchange left to rewind"):
+        conv.rewind()
+    with pytest.raises(ValueError, match="at least one exchange"):
+        conv.rewind(0)
