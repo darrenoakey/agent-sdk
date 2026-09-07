@@ -64,6 +64,27 @@ Under an exclusive lock (other submits queue behind it):
 5. **Deploy** — run `./run deploy` with cwd = the canonical checkout. Nonzero → **automatic rollback**: main resets to the previous commit and `./run deploy` re-runs to restore prod.
 6. **Publish** — push `main` to origin (via a one-shot allow-push flag the pre-push hook honours) and advance `last-green`.
 
+## How `./release-gate` spends the release budget
+
+`check = ./release-gate` (see greenline.toml). The gate is a phase graph, not a
+script of sequential steps:
+
+- **Impact selection.** The candidate's changed paths (`git diff HEAD^ HEAD`
+  plus anything dirty) choose the areas: `src/**` selects the Python phases,
+  `go/**` the Go phases, image/capability/dependency paths additionally select
+  the live IGS canaries, and docs-only changes select just the forbidden-route
+  scans. Anything unmapped — the gate itself, greenline.toml, `tests/`, or an
+  undeterminable diff — selects **every** area. `tests/release_gate_test.py`
+  pins that mapping.
+- **Parallel phases.** Phases declare dependencies and run concurrently, so the
+  release pays the critical path (the Python suite), not the sum. The suite
+  itself runs under `pytest-xdist`.
+- **Warm venv.** The gate worktree is persistent; requirements are reinstalled
+  only when `requirements.txt`'s hash changes.
+
+Adding product code must not add release time: put new coverage behind the area
+it belongs to, and keep the critical path short rather than raising the budget.
+
 ## The contract (you must implement in `./run`)
 
 - **`./run check`** — cwd = the worktree being gated. Build + lint + FULL tests against a

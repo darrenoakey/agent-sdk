@@ -137,11 +137,23 @@ else:
             version_file.write_text(text)
             print(f"Version bumped to {new_ver}")
             try:
-                subprocess.run([sys.executable, "-m", "pip", "install", "-q", "build", "twine"], check=True)
+                subprocess.run(
+                    [sys.executable, "-m", "pip", "install", "-q", "build", "twine", "setuptools", "wheel"],
+                    check=True,
+                )
                 for d in (SCRIPT_DIR / "dist", SCRIPT_DIR / "build"):
                     if d.exists():
                         shutil.rmtree(d)
-                subprocess.run([sys.executable, "-m", "build"], cwd=str(SCRIPT_DIR), check=True)
+                # --no-isolation: `build`'s default creates TWO throwaway venvs
+                # (one for the sdist, one for the wheel) and pip-installs
+                # setuptools into each — 35s of the release budget for a
+                # backend this venv already has pinned above. Building in this
+                # interpreter produces the same artifacts in ~10s.
+                subprocess.run(
+                    [sys.executable, "-m", "build", "--no-isolation"],
+                    cwd=str(SCRIPT_DIR),
+                    check=True,
+                )
             finally:
                 version_file.write_text(original_text)
 

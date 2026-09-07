@@ -1,187 +1,387 @@
-#!/bin/sh
-set -eu
+#!/usr/bin/env python3
+"""Release gate: impact-selected, parallel validation of the candidate.
+
+The gate runs inside greenline's persistent worktree with cwd = the candidate
+being gated. It must exit 0 only when everything the candidate could break has
+been validated for real.
+
+Two properties keep the release inside the 180-second target while keeping the
+validation honest (see docs/DOCTRINE.md, "The release time budget"):
+
+* **Impact selection.** The candidate's changed paths choose the phases. The
+  Python package and the Go module are independent trees with no shared source,
+  so a Python-only change never needs the Go compile/test phases and vice
+  versa. Anything that cannot be attributed - a change to the gate itself, to
+  greenline config, or an undeterminable diff - selects every phase.
+* **Parallel execution.** Phases declare their dependencies and run
+  concurrently; the wall clock is the critical path, not the sum.
+
+Nothing here weakens a check: every selected phase runs exactly the command it
+ran when the gate was serial, and the first failure fails the release.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import xml.etree.ElementTree as ET
+from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass, field
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+PYTHON_BIN = PROJECT_ROOT / ".venv" / "bin" / "python"
+REMOTE_HOST = "darrenoakey@10.0.0.46"
 # Homebrew tools (rg) and keg-only libpq (psql) must be on PATH for gate hosts
 # that launch without an interactive shell profile.
-PATH="/opt/homebrew/opt/libpq/bin:/opt/homebrew/bin:${HOME:+$HOME/bin:}${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}"
-export PATH
-
-project_root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-work_root=$(mktemp -d "/tmp/daz-agent-sdk-release.XXXXXX")
-python_bin="$project_root/.venv/bin/python"
-remote_host="darrenoakey@10.0.0.46"
-remote_root=""
-
-cleanup() {
-    if [ -n "$remote_root" ]; then
-        case "$remote_root" in
-            /tmp/daz-agent-sdk-go-canary.*)
-                ssh -o BatchMode=yes -o ConnectTimeout=10 "$remote_host" \
-                    "rm -rf -- $remote_root" >/dev/null 2>&1 || true
-                ;;
-        esac
-    fi
-    rm -rf -- "$work_root"
-}
-trap cleanup EXIT HUP INT TERM
-
-run_phase() {
-    phase_name=$1
-    shift
-    log_path="$work_root/$phase_name.log"
-    start_ts=$(date +%s)
-    printf '%s' "$phase_name"
-    if "$@" >"$log_path" 2>&1; then
-        printf ' %ss\n' "$(( $(date +%s) - start_ts ))"
-        return 0
-    else
-        phase_status=$?
-        printf ' %ss FAILED\n' "$(( $(date +%s) - start_ts ))"
-        # A head-only dump hides the failure whenever the phase is chatty:
-        # `go test -json` emits thousands of lines and the failing test is
-        # always near the end. Print both ends, and for a Go JSON stream also
-        # pull out the failing test names so the cause survives truncation.
-        printf '%s\n' "--- $phase_name: first 80 lines ---"
-        sed -n '1,80p' "$log_path"
-        printf '%s\n' "--- $phase_name: last 200 lines ---"
-        tail -n 200 "$log_path"
-        if grep -q '"Action":"fail"' "$log_path" 2>/dev/null; then
-            printf '%s\n' "--- $phase_name: failing tests ---"
-            grep '"Action":"fail"' "$log_path" | sed -n '1,60p'
-            printf '%s\n' "--- $phase_name: failure output ---"
-            grep -E '"Output":".*(FAIL|Error|error|panic)' "$log_path" | sed -n '1,80p'
-        fi
-        return "$phase_status"
-    fi
-}
-
-validate_pytest_xml() {
-    xml_path=$1
-    "$python_bin" - "$xml_path" <<'PYTEST_XML_VALIDATOR'
-import sys
-import xml.etree.ElementTree as ET
+PATH_PREFIX = ("/opt/homebrew/opt/libpq/bin", "/opt/homebrew/bin", str(Path.home() / "bin"))
+# pytest workers. The box has 10 cores and the type/Go phases run alongside the
+# suite, so leave headroom rather than claiming every core.
+PYTEST_WORKERS = "8"
 
 
-def local_name(tag):
-    return tag.rsplit("}", 1)[-1].lower()
+# ##################################################################
+# phase
+# one unit of validation: a command or callable plus its prerequisites
+@dataclass
+class Phase:
+    name: str
+    run: Callable[[Path], None]
+    needs: tuple[str, ...] = ()
+    seconds: float = 0.0
+    error: str = ""
+    started: bool = False
+    log_path: Path | None = field(default=None, repr=False)
 
 
-def count_attribute(element, name):
-    value = element.attrib.get(name, "0")
-    try:
-        count = int(value)
-    except ValueError as error:
-        raise SystemExit(f"invalid pytest JUnit XML {name} count {value!r}") from error
-    if count < 0:
-        raise SystemExit(f"invalid pytest JUnit XML {name} count {count}")
-    return count
+class PhaseFailure(RuntimeError):
+    """A phase failed; the message is the operator-facing explanation."""
 
 
-xml_path = sys.argv[1]
-root = ET.parse(xml_path).getroot()
-suites = [element for element in root.iter() if local_name(element.tag) == "testsuite"]
-if not suites:
-    raise SystemExit("pytest JUnit XML contains no testsuite")
+# ##################################################################
+# command phase runner
+# execute a subprocess, capture its output, raise with the log on failure
+def _command(
+    argv: Sequence[str],
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+    stdin_text: str | None = None,
+) -> Callable[[Path], None]:
+    def _run(log_path: Path) -> None:
+        with log_path.open("wb") as log_file:
+            keywords: dict[str, object] = {"stdin": subprocess.DEVNULL}
+            if stdin_text is not None:
+                keywords = {"input": stdin_text.encode()}
+            completed = subprocess.run(
+                list(argv),
+                cwd=str(cwd or PROJECT_ROOT),
+                env=env,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                check=False,
+                **keywords,  # type: ignore[arg-type]
+            )
+        if completed.returncode != 0:
+            raise PhaseFailure(f"exit {completed.returncode}")
 
-containers = [
-    element for element in root.iter() if local_name(element.tag) in {"testsuite", "testsuites"}
-]
-for suite in containers:
-    for outcome in ("errors", "failures", "skipped"):
-        count = count_attribute(suite, outcome)
-        if count:
-            raise SystemExit(f"pytest JUnit XML reports {count} {outcome}")
-    for outcome in ("xfail", "xfails", "xfailed", "xpass", "xpasses", "xpassed"):
-        if outcome in suite.attrib and count_attribute(suite, outcome):
-            raise SystemExit(f"pytest JUnit XML reports {suite.attrib[outcome]} {outcome}")
+    return _run
 
-test_cases = [element for element in root.iter() if local_name(element.tag) == "testcase"]
-for test_case in test_cases:
-    for child in test_case:
-        outcome = local_name(child.tag)
-        if outcome in {
-            "error", "failure", "skipped", "xfail", "xfails", "xfailed", "xpass", "xpasses", "xpassed"
+
+# ##################################################################
+# shell phase runner
+# same as _command but for the two checks that need shell semantics
+def _shell(script: str, *, cwd: Path | None = None) -> Callable[[Path], None]:
+    return _command(["/bin/sh", "-c", script], cwd=cwd)
+
+
+# ##################################################################
+# read changed paths
+# ask git which repository paths this candidate actually touches
+def _changed_paths() -> set[str] | None:
+    def _git(*args: str) -> str | None:
+        try:
+            completed = subprocess.run(
+                ["git", *args],
+                cwd=str(PROJECT_ROOT),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError:
+            return None
+        if completed.returncode != 0:
+            return None
+        return completed.stdout
+
+    head_parent = _git("rev-parse", "--verify", "--quiet", "HEAD^")
+    if not head_parent:
+        return None
+    diff = _git("diff", "--name-only", "HEAD^", "HEAD")
+    if diff is None:
+        return None
+    status = _git("status", "--porcelain")
+    if status is None:
+        return None
+    paths = {line.strip() for line in diff.splitlines() if line.strip()}
+    for line in status.splitlines():
+        entry = line[3:].strip()
+        if not entry:
+            continue
+        # rename entries read "old -> new"; both sides count as touched.
+        for part in entry.split(" -> "):
+            cleaned = part.strip().strip('"')
+            if cleaned:
+                paths.add(cleaned)
+    return paths
+
+
+# ##################################################################
+# impact selection
+# map changed paths onto the validation areas they can break
+def select_areas(changed: set[str] | None) -> tuple[set[str], str]:
+    areas = {"scan"}
+    if changed is None:
+        return {"scan", "python", "go", "image"}, "full (diff unavailable)"
+    if not changed:
+        return {"scan", "python", "go", "image"}, "full (empty diff)"
+
+    unattributed: list[str] = []
+    for path in sorted(changed):
+        if path.startswith("src/") or path in {
+            "pyproject.toml",
+            "requirements.txt",
+            "run",
         }:
-            raise SystemExit(f"pytest JUnit XML testcase reports {outcome}")
-    represented_outcome = " ".join(
-        test_case.attrib.get(name, "").lower() for name in ("status", "result", "outcome")
-    )
-    if any(outcome in represented_outcome for outcome in ("xfail", "xpass")):
-        raise SystemExit("pytest JUnit XML testcase reports xfail/xpass")
+            areas.add("python")
+            if path.startswith("src/daz_agent_sdk/capabilities/") or path in {
+                "src/daz_agent_sdk/config.py",
+                "pyproject.toml",
+                "requirements.txt",
+            }:
+                areas.add("image")
+        elif path.startswith("go/"):
+            areas.add("go")
+            if (
+                path.startswith("go/capability/")
+                or path.startswith("go/provider/")
+                or path in {"go/go.mod", "go/go.sum", "go/config.go"}
+            ):
+                areas.add("image")
+        elif path.startswith("docs/") or path.endswith(".md") or path in {
+            "banner.jpg",
+            ".gitignore",
+        }:
+            continue
+        else:
+            unattributed.append(path)
 
-for element in root.iter():
-    if local_name(element.tag) == "property":
-        represented_outcome = " ".join(value.lower() for value in element.attrib.values())
-        if any(outcome in represented_outcome for outcome in ("xfail", "xpass")):
-            raise SystemExit("pytest JUnit XML property reports xfail/xpass")
+    if unattributed:
+        # The gate script, greenline config, or anything else unmapped could
+        # affect any area: validate everything rather than guess.
+        return {"scan", "python", "go", "image"}, f"full (unmapped: {', '.join(unattributed[:4])})"
+    if areas == {"scan"}:
+        return areas, "documentation only"
+    return areas, ", ".join(sorted(areas))
 
-if test_cases:
-    test_count = len(test_cases)
-else:
-    if local_name(root.tag) == "testsuite":
-        top_suites = [root]
+
+# ##################################################################
+# pytest junit xml validation
+# a green exit code is not enough: no skip, xfail, xpass, or empty suite
+def validate_pytest_xml(xml_path: Path) -> None:
+    def local_name(tag: str) -> str:
+        return tag.rsplit("}", 1)[-1].lower()
+
+    def count_attribute(element: ET.Element, name: str) -> int:
+        value = element.attrib.get(name, "0")
+        try:
+            count = int(value)
+        except ValueError as error:
+            raise PhaseFailure(
+                f"invalid pytest JUnit XML {name} count {value!r}"
+            ) from error
+        if count < 0:
+            raise PhaseFailure(f"invalid pytest JUnit XML {name} count {count}")
+        return count
+
+    root = ET.parse(xml_path).getroot()
+    suites = [element for element in root.iter() if local_name(element.tag) == "testsuite"]
+    if not suites:
+        raise PhaseFailure("pytest JUnit XML contains no testsuite")
+
+    containers = [
+        element
+        for element in root.iter()
+        if local_name(element.tag) in {"testsuite", "testsuites"}
+    ]
+    for suite in containers:
+        for outcome in ("errors", "failures", "skipped"):
+            count = count_attribute(suite, outcome)
+            if count:
+                raise PhaseFailure(f"pytest JUnit XML reports {count} {outcome}")
+        for outcome in ("xfail", "xfails", "xfailed", "xpass", "xpasses", "xpassed"):
+            if outcome in suite.attrib and count_attribute(suite, outcome):
+                raise PhaseFailure(
+                    f"pytest JUnit XML reports {suite.attrib[outcome]} {outcome}"
+                )
+
+    test_cases = [element for element in root.iter() if local_name(element.tag) == "testcase"]
+    for test_case in test_cases:
+        for child in test_case:
+            outcome = local_name(child.tag)
+            if outcome in {
+                "error",
+                "failure",
+                "skipped",
+                "xfail",
+                "xfails",
+                "xfailed",
+                "xpass",
+                "xpasses",
+                "xpassed",
+            }:
+                raise PhaseFailure(f"pytest JUnit XML testcase reports {outcome}")
+        represented = " ".join(
+            test_case.attrib.get(name, "").lower() for name in ("status", "result", "outcome")
+        )
+        if any(outcome in represented for outcome in ("xfail", "xpass")):
+            raise PhaseFailure("pytest JUnit XML testcase reports xfail/xpass")
+
+    for element in root.iter():
+        if local_name(element.tag) == "property":
+            represented = " ".join(value.lower() for value in element.attrib.values())
+            if any(outcome in represented for outcome in ("xfail", "xpass")):
+                raise PhaseFailure("pytest JUnit XML property reports xfail/xpass")
+
+    if test_cases:
+        test_count = len(test_cases)
     else:
-        top_suites = [element for element in root if local_name(element.tag) == "testsuite"]
-    test_count = sum(count_attribute(suite, "tests") for suite in top_suites)
+        top_suites = (
+            [root]
+            if local_name(root.tag) == "testsuite"
+            else [element for element in root if local_name(element.tag) == "testsuite"]
+        )
+        test_count = sum(count_attribute(suite, "tests") for suite in top_suites)
+    if test_count == 0:
+        raise PhaseFailure("pytest JUnit XML reports zero tests")
 
-if test_count == 0:
-    raise SystemExit("pytest JUnit XML reports zero tests")
-print(f"pytest JUnit XML passed: tests={test_count} errors=0 failures=0 skipped=0")
-PYTEST_XML_VALIDATOR
-}
 
-if [ ! -x "$python_bin" ]; then
-    printf '%s\n' "release gate requires the repository venv at $python_bin" >&2
-    exit 1
-fi
+# ##################################################################
+# forbidden route scan
+# the still-image route must stay closed in both language trees
+def _route_scan(pattern: str, path: str, message: str) -> Callable[[Path], None]:
+    def _run(log_path: Path) -> None:
+        with log_path.open("wb") as log_file:
+            completed = subprocess.run(
+                ["rg", "-n", pattern, path],
+                cwd=str(PROJECT_ROOT),
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                check=False,
+            )
+        if completed.returncode == 0:
+            raise PhaseFailure(message)
+        if completed.returncode != 1:
+            raise PhaseFailure(f"route scan failed: rg exit {completed.returncode}")
 
-cd "$project_root"
-run_phase python-dependencies "$python_bin" -m pip check
-run_phase python-lint "$python_bin" -m ruff check src
-run_phase python-types "$python_bin" -m pyright src/daz_agent_sdk
-run_phase python-tests "$python_bin" -m pytest -q -W error -rA --junitxml "$work_root/python-tests.xml" \
-    -m "not real_igs and not live" src
-run_phase python-tests-outcomes validate_pytest_xml "$work_root/python-tests.xml"
+    return _run
 
-if rg -n 'Capability\.IMAGE|async def (generate_)?image|def (generate_)?image' \
-    src/daz_agent_sdk/providers >"$work_root/python-image-route-scan.log" 2>&1; then
-    sed -n '1,240p' "$work_root/python-image-route-scan.log"
-    printf '%s\n' "python provider exposes a callable still-image route" >&2
-    exit 1
-fi
-if rg -n 'CapabilityImage|func .*Image' go/provider >"$work_root/go-image-route-scan.log" 2>&1; then
-    sed -n '1,240p' "$work_root/go-image-route-scan.log"
-    printf '%s\n' "go provider exposes a callable still-image route" >&2
-    exit 1
-fi
-printf '%s\n' image-route-scan
 
-# Keep the host GOCACHE (typically go-build-agentd3-gate). The previous
-# per-run mktemp GOCACHE forced a cold compile on every gate.
-cd "$project_root/go"
-run_phase go-format sh -c 'files=$(gofmt -l .); test -z "$files"'
-run_phase go-vet go vet ./...
-run_phase go-tests go test -json -count=1 -timeout 60s ./...
-if rg -n '"Action":"skip"' "$work_root/go-tests.log"; then
-    printf '%s\n' "go release tests reported an unexpected skip" >&2
-    exit 1
-fi
-run_phase go-live-compile go test -tags=live -run '^$' ./...
-run_phase go-build go build -o "$work_root/agent-sdk" ./cmd/agent-sdk
+# ##################################################################
+# go skip scan
+# a skipped Go test hides missing coverage; the JSON stream must have none
+def _assert_no_go_skips(go_tests_log: Path) -> Callable[[Path], None]:
+    def _run(_log_path: Path) -> None:
+        text = go_tests_log.read_text(errors="replace")
+        if '"Action":"skip"' in text:
+            raise PhaseFailure("go release tests reported an unexpected skip")
 
-cd "$project_root"
-# Gate canaries must finish under greenline's hard 5-minute check cap.
-# Prove transport on this host via the sticky loopback tunnel, then prove the
-# Mac mini can still reach the co-located service natively. Full image
-# generation remains covered by the live_igs / real_igs tests outside the gate
-# budget and by production image workflows.
-# Compile the live_igs healthz binary for the Mac mini (x86_64) and reuse it
-# remotely instead of shipping the Go tree for a cold remote compile. Local
-# healthz stays native so the laptop does not need Rosetta.
-cd "$project_root/go"
-run_phase real-local-go-igs-healthz go test -tags=live_igs -count=1 -run '^TestImageServiceNativeTransportLive$' ./capability
-run_phase go-igs-healthz-binary env CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go test -c -o "$work_root/igs-healthz.test" -tags=live_igs -count=1 ./capability
-cd "$project_root"
-run_phase real-local-python-igs-healthz "$python_bin" - <<'PY'
+    return _run
+
+
+# ##################################################################
+# remote go canary
+# ship the prebuilt amd64 healthz binary to the Mac mini and run it there
+def _remote_canary(binary_path: Path) -> Callable[[Path], None]:
+    def _run(log_path: Path) -> None:
+        ssh_base = [
+            "ssh",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=10",
+            REMOTE_HOST,
+        ]
+        with log_path.open("w") as log_file:
+            made = subprocess.run(
+                [*ssh_base, "mktemp -d /tmp/daz-agent-sdk-go-canary.XXXXXX"],
+                capture_output=True,
+                text=True,
+                stdin=subprocess.DEVNULL,
+                check=False,
+            )
+            log_file.write(made.stdout + made.stderr)
+            if made.returncode != 0:
+                raise PhaseFailure(f"remote mktemp exit {made.returncode}")
+            remote_root = made.stdout.splitlines()[0].strip() if made.stdout.strip() else ""
+            if not remote_root.startswith("/tmp/daz-agent-sdk-go-canary."):
+                raise PhaseFailure(
+                    f"Mac mini returned an unsafe canary temporary path: {remote_root!r}"
+                )
+            try:
+                copied = subprocess.run(
+                    [
+                        "scp",
+                        "-q",
+                        "-o",
+                        "BatchMode=yes",
+                        "-o",
+                        "ConnectTimeout=10",
+                        str(binary_path),
+                        f"{REMOTE_HOST}:{remote_root}/igs-healthz.test",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    stdin=subprocess.DEVNULL,
+                    check=False,
+                )
+                log_file.write(copied.stdout + copied.stderr)
+                if copied.returncode != 0:
+                    raise PhaseFailure(f"scp of canary binary exit {copied.returncode}")
+                ran = subprocess.run(
+                    [
+                        *ssh_base,
+                        f"chmod +x {remote_root}/igs-healthz.test && "
+                        f"{remote_root}/igs-healthz.test "
+                        "-test.run '^TestImageServiceNativeTransportLive$' -test.count=1",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    stdin=subprocess.DEVNULL,
+                    check=False,
+                )
+                log_file.write(ran.stdout + ran.stderr)
+                if ran.returncode != 0:
+                    raise PhaseFailure(f"remote IGS healthz exit {ran.returncode}")
+            finally:
+                subprocess.run(
+                    [*ssh_base, f"rm -rf -- {remote_root}"],
+                    capture_output=True,
+                    stdin=subprocess.DEVNULL,
+                    check=False,
+                )
+
+    return _run
+
+
+PYTHON_IGS_HEALTHZ = """
 import asyncio
 from daz_agent_sdk.capabilities import image as image_module
 
@@ -196,20 +396,324 @@ async def main() -> None:
     )
 
 asyncio.run(main())
-PY
+"""
 
-run_phase remote-temp ssh -o BatchMode=yes -o ConnectTimeout=10 "$remote_host" \
-    mktemp -d /tmp/daz-agent-sdk-go-canary.XXXXXX
-remote_root=$(sed -n '1p' "$work_root/remote-temp.log")
-case "$remote_root" in
-    /tmp/daz-agent-sdk-go-canary.*) ;;
-    *)
-        printf '%s\n' "Mac mini returned an unsafe canary temporary path: $remote_root" >&2
-        exit 1
-        ;;
-esac
-run_phase copy-igs-binary scp -q -o BatchMode=yes -o ConnectTimeout=10 \
-    "$work_root/igs-healthz.test" "$remote_host:$remote_root/igs-healthz.test"
-run_phase real-remote-go-igs-healthz ssh -o BatchMode=yes -o ConnectTimeout=10 "$remote_host" \
-    "chmod +x $remote_root/igs-healthz.test && $remote_root/igs-healthz.test -test.run '^TestImageServiceNativeTransportLive$' -test.count=1"
-printf '%s\n' "release gate passed"
+
+# ##################################################################
+# build phases
+# assemble the phase graph for the selected impact areas
+def build_phases(areas: set[str], work_root: Path, env: dict[str, str]) -> list[Phase]:
+    go_root = PROJECT_ROOT / "go"
+    xml_path = work_root / "python-tests.xml"
+    healthz_binary = work_root / "igs-healthz.test"
+    phases: list[Phase] = []
+
+    if "python" in areas:
+        phases.extend(
+            [
+                Phase("python-dependencies", _command([str(PYTHON_BIN), "-m", "pip", "check"])),
+                Phase("python-lint", _command([str(PYTHON_BIN), "-m", "ruff", "check", "src"])),
+                Phase(
+                    "python-types",
+                    _command([str(PYTHON_BIN), "-m", "pyright", "src/daz_agent_sdk"]),
+                ),
+                Phase(
+                    "python-tests",
+                    _command(
+                        [
+                            str(PYTHON_BIN),
+                            "-m",
+                            "pytest",
+                            "-q",
+                            "-W",
+                            "error",
+                            "-rA",
+                            "-p",
+                            "xdist",
+                            "-n",
+                            PYTEST_WORKERS,
+                            "--dist",
+                            "worksteal",
+                            "--junitxml",
+                            str(xml_path),
+                            "-m",
+                            "not real_igs and not live",
+                            "src",
+                        ]
+                    ),
+                ),
+                Phase(
+                    "python-tests-outcomes",
+                    lambda _log, path=xml_path: validate_pytest_xml(path),
+                    needs=("python-tests",),
+                ),
+            ]
+        )
+
+    phases.extend(
+        [
+            Phase(
+                "python-image-route-scan",
+                _route_scan(
+                    r"Capability\.IMAGE|async def (generate_)?image|def (generate_)?image",
+                    "src/daz_agent_sdk/providers",
+                    "python provider exposes a callable still-image route",
+                ),
+            ),
+            Phase(
+                "go-image-route-scan",
+                _route_scan(
+                    r"CapabilityImage|func .*Image",
+                    "go/provider",
+                    "go provider exposes a callable still-image route",
+                ),
+            ),
+            Phase(
+                "gate-selftest",
+                _command(
+                    [str(PYTHON_BIN), "-m", "pytest", "-q", "-W", "error", "tests"]
+                ),
+            ),
+        ]
+    )
+
+    if "go" in areas:
+        phases.extend(
+            [
+                Phase(
+                    "go-format",
+                    _shell('files=$(gofmt -l .); test -z "$files" || { echo "$files"; exit 1; }', cwd=go_root),
+                ),
+                Phase("go-vet", _command(["go", "vet", "./..."], cwd=go_root, env=env)),
+                Phase(
+                    "go-tests",
+                    _command(
+                        ["go", "test", "-json", "-count=1", "-timeout", "60s", "./..."],
+                        cwd=go_root,
+                        env=env,
+                    ),
+                ),
+                Phase(
+                    "go-tests-outcomes",
+                    _assert_no_go_skips(work_root / "go-tests.log"),
+                    needs=("go-tests",),
+                ),
+                Phase(
+                    "go-live-compile",
+                    _command(
+                        ["go", "test", "-tags=live", "-run", "^$", "./..."], cwd=go_root, env=env
+                    ),
+                ),
+                Phase(
+                    "go-build",
+                    _command(
+                        ["go", "build", "-o", str(work_root / "agent-sdk"), "./cmd/agent-sdk"],
+                        cwd=go_root,
+                        env=env,
+                    ),
+                ),
+            ]
+        )
+
+    if "image" in areas:
+        # Gate canaries prove the live route to the canonical Mac mini image
+        # service on this host and natively on the mini itself. Full image
+        # generation stays in the live_igs / real_igs suites outside the gate.
+        go_env = dict(env)
+        go_env.update({"CGO_ENABLED": "0", "GOOS": "darwin", "GOARCH": "amd64"})
+        phases.extend(
+            [
+                Phase(
+                    "real-local-go-igs-healthz",
+                    _command(
+                        [
+                            "go",
+                            "test",
+                            "-tags=live_igs",
+                            "-count=1",
+                            "-run",
+                            "^TestImageServiceNativeTransportLive$",
+                            "./capability",
+                        ],
+                        cwd=go_root,
+                        env=env,
+                    ),
+                ),
+                Phase(
+                    "go-igs-healthz-binary",
+                    _command(
+                        [
+                            "go",
+                            "test",
+                            "-c",
+                            "-o",
+                            str(healthz_binary),
+                            "-tags=live_igs",
+                            "-count=1",
+                            "./capability",
+                        ],
+                        cwd=go_root,
+                        env=go_env,
+                    ),
+                ),
+                Phase(
+                    "real-remote-go-igs-healthz",
+                    _remote_canary(healthz_binary),
+                    needs=("go-igs-healthz-binary",),
+                ),
+                Phase(
+                    "real-local-python-igs-healthz",
+                    _command([str(PYTHON_BIN), "-"], stdin_text=PYTHON_IGS_HEALTHZ),
+                ),
+            ]
+        )
+
+    return phases
+
+
+# ##################################################################
+# run phases
+# execute the graph concurrently, honouring dependencies, failing fast
+def run_phases(phases: Iterable[Phase], work_root: Path) -> Phase | None:
+    by_name = {phase.name: phase for phase in phases}
+    done: set[str] = set()
+    failed: Phase | None = None
+    lock = threading.Lock()
+    threads: list[threading.Thread] = []
+
+    def worker(phase: Phase) -> None:
+        nonlocal failed
+        log_path = work_root / f"{phase.name}.log"
+        phase.log_path = log_path
+        started = time.monotonic()
+        try:
+            phase.run(log_path)
+        except PhaseFailure as failure:
+            phase.error = str(failure)
+        except Exception as failure:  # noqa: BLE001 - any phase crash is a gate failure
+            phase.error = f"{type(failure).__name__}: {failure}"
+        phase.seconds = time.monotonic() - started
+        with lock:
+            done.add(phase.name)
+            if phase.error and failed is None:
+                failed = phase
+            print(
+                f"{phase.name} {phase.seconds:.0f}s" + (" FAILED" if phase.error else ""),
+                flush=True,
+            )
+
+    while True:
+        with lock:
+            if failed is not None:
+                break
+            ready = [
+                phase
+                for phase in by_name.values()
+                if not phase.started and set(phase.needs) <= done
+            ]
+            for phase in ready:
+                phase.started = True
+            remaining = [phase for phase in by_name.values() if phase.name not in done]
+        if not remaining:
+            break
+        for phase in ready:
+            thread = threading.Thread(target=worker, args=(phase,), daemon=True)
+            thread.start()
+            threads.append(thread)
+        time.sleep(0.05)
+
+    for thread in threads:
+        thread.join()
+    with lock:
+        if failed is None:
+            for phase in by_name.values():
+                if phase.error:
+                    failed = phase
+                    break
+    return failed
+
+
+# ##################################################################
+# report failure
+# print enough of the failing phase's log that the cause survives truncation
+def report_failure(phase: Phase) -> None:
+    print(f"--- {phase.name}: {phase.error} ---")
+    if phase.log_path is None or not phase.log_path.exists():
+        return
+    lines = phase.log_path.read_text(errors="replace").splitlines()
+    print(f"--- {phase.name}: first 80 lines ---")
+    print("\n".join(lines[:80]))
+    print(f"--- {phase.name}: last 200 lines ---")
+    print("\n".join(lines[-200:]))
+    failing = [line for line in lines if '"Action":"fail"' in line]
+    if failing:
+        print(f"--- {phase.name}: failing tests ---")
+        print("\n".join(failing[:60]))
+
+
+# ##################################################################
+# sync gate venv
+# the gate worktree venv is persistent and warm; reinstall requirements only
+# when requirements.txt actually changed, so a new test dependency (e.g.
+# pytest-xdist) can never make the gate fail on a stale venv
+def sync_python_requirements() -> None:
+    requirements = PROJECT_ROOT / "requirements.txt"
+    if not requirements.is_file():
+        return
+    stamp = PROJECT_ROOT / ".venv" / ".gate-requirements-sha256"
+    digest = hashlib.sha256(requirements.read_bytes()).hexdigest()
+    if stamp.is_file() and stamp.read_text().strip() == digest:
+        return
+    started = time.monotonic()
+    completed = subprocess.run(
+        [str(PYTHON_BIN), "-m", "pip", "install", "-q", "-r", str(requirements)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise PhaseFailure(
+            f"requirements sync failed: {completed.stdout}\n{completed.stderr}"
+        )
+    stamp.write_text(digest + "\n")
+    print(f"python-requirements-sync {time.monotonic() - started:.0f}s", flush=True)
+
+
+# ##################################################################
+# main
+# select, run, and report the release gate
+def main() -> int:
+    if not os.access(PYTHON_BIN, os.X_OK):
+        print(f"release gate requires the repository venv at {PYTHON_BIN}", file=sys.stderr)
+        return 1
+
+    env = dict(os.environ)
+    env["PATH"] = os.pathsep.join((*PATH_PREFIX, env.get("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")))
+    os.environ["PATH"] = env["PATH"]
+
+    changed = _changed_paths()
+    areas, reason = select_areas(changed)
+    print(f"impact selection: {reason}", flush=True)
+
+    work_root = Path(tempfile.mkdtemp(prefix="daz-agent-sdk-release."))
+    started = time.monotonic()
+    try:
+        if "python" in areas:
+            sync_python_requirements()
+        phases = build_phases(areas, work_root, env)
+        failed = run_phases(phases, work_root)
+        if failed is not None:
+            report_failure(failed)
+            print(f"release gate FAILED in {time.monotonic() - started:.0f}s", file=sys.stderr)
+            return 1
+        print(f"release gate passed in {time.monotonic() - started:.0f}s")
+        return 0
+    except PhaseFailure as failure:
+        print(str(failure), file=sys.stderr)
+        return 1
+    finally:
+        shutil.rmtree(work_root, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
