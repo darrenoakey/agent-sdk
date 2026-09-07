@@ -180,6 +180,19 @@ class ArbiterProvider(Provider):
     # message) plus an OpenAI response_format hint — the arbiter's
     # vLLM worker ignores response_format it doesn't support, but the
     # prompt instruction ensures the model still returns valid JSON.
+    def _provenance(self) -> tuple[str | None, str | None]:
+        """Caller provenance for arbiter attribution (who/why).
+
+        who defaults to this SDK's name; both may be overridden by the ambient
+        ARBITER_WHO/ARBITER_WHY environment context a root task exports so
+        every leaf GPU call carries the root human reason.
+        """
+        import os
+
+        who = (os.environ.get("ARBITER_WHO", "").strip() or "daz-agent-sdk")[:128]
+        why = os.environ.get("ARBITER_WHY", "").strip()[:256]
+        return who or None, why or None
+
     async def complete(
         self,
         messages: list[Message],
@@ -222,6 +235,11 @@ class ArbiterProvider(Provider):
             "messages": msg_list,
             "stream": False,
         }
+        who, why = self._provenance()
+        if who:
+            payload["who"] = who
+        if why:
+            payload["why"] = why
         # reasoning models spend completion budget on thinking BEFORE the
         # visible answer; the arbiter worker's default cap (4096) truncates
         # long prose mid-sentence once a big prompt provokes long thinking.
@@ -318,9 +336,12 @@ class ArbiterProvider(Provider):
         *,
         timeout: float = 300.0,
     ) -> AsyncIterator[str]:
+        who, why = self._provenance()
         payload = {
             "model": model.model_id,
             "messages": self._build_messages(messages),
+            **({"who": who} if who else {}),
+            **({"why": why} if why else {}),
             "stream": True,
         }
 
@@ -390,6 +411,12 @@ class ArbiterProvider(Provider):
                 kind=ErrorKind.INVALID_REQUEST,
             )
 
+        who, why = self._provenance()
+        source: dict[str, Any] = {}
+        if who:
+            source["who"] = who
+        if why:
+            source["why"] = why
         payload: dict[str, Any] = {
             "type": "embed-text",
             "params": {
@@ -397,6 +424,7 @@ class ArbiterProvider(Provider):
                 "task": task,
                 "batch_size": batch_size,
             },
+            "source": source,
         }
 
         try:

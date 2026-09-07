@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -182,6 +183,29 @@ type openAIRequest struct {
 	Messages       []openAIMessage `json:"messages"`
 	Stream         bool            `json:"stream"`
 	ResponseFormat any             `json:"response_format,omitempty"`
+	// Who/Why are non-standard caller-provenance fields the arbiter pops
+	// server-side before routing; they never reach the model.
+	Who string `json:"who,omitempty"`
+	Why string `json:"why,omitempty"`
+}
+
+// arbiterProvenance returns caller-provenance fields for arbiter requests.
+// who defaults to this SDK's name; both may be overridden by the ambient
+// ARBITER_WHO/ARBITER_WHY environment context a root task exports so every
+// leaf GPU call carries the root human reason.
+func arbiterProvenance() (who, why string) {
+	who = strings.TrimSpace(os.Getenv("ARBITER_WHO"))
+	if who == "" {
+		who = "daz-agent-sdk-go"
+	}
+	if len(who) > 128 {
+		who = who[:128]
+	}
+	why = strings.TrimSpace(os.Getenv("ARBITER_WHY"))
+	if len(why) > 256 {
+		why = why[:256]
+	}
+	return who, why
 }
 
 // openAIResponse decodes the non-streaming /v1/chat/completions body.
@@ -265,11 +289,14 @@ func (a *ArbiterProvider) Complete(ctx context.Context, messages []sdk.Message, 
 		}
 	}
 
+	who, why := arbiterProvenance()
 	payload := openAIRequest{
 		Model:          model.ModelID,
 		Messages:       msgs,
 		Stream:         false,
 		ResponseFormat: responseFormat,
+		Who:            who,
+		Why:            why,
 	}
 
 	body, err := json.Marshal(payload)
@@ -358,10 +385,13 @@ func (a *ArbiterProvider) Stream(ctx context.Context, messages []sdk.Message, mo
 		ctx, cancel = context.WithTimeout(ctx, time.Duration(opts.Timeout*float64(time.Second)))
 	}
 
+	who, why := arbiterProvenance()
 	payload := openAIRequest{
 		Model:    model.ModelID,
 		Messages: buildArbiterMessages(messages),
 		Stream:   true,
+		Who:      who,
+		Why:      why,
 	}
 
 	body, err := json.Marshal(payload)

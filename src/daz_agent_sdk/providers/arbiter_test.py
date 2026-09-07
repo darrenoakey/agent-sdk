@@ -366,3 +366,29 @@ async def test_complete_reasoning_none_with_schema_returns_pure_json(
     assert result.text.lstrip().startswith("{")
     json.loads(result.text)
     assert elapsed < 120, f"no-think structured answer took {elapsed:.0f}s"
+
+
+class TestProvenance:
+    def test_who_defaults_to_sdk_name(self, monkeypatch):
+        monkeypatch.delenv("ARBITER_WHO", raising=False)
+        monkeypatch.delenv("ARBITER_WHY", raising=False)
+        provider = ArbiterProvider.__new__(ArbiterProvider)
+        who, why = provider._provenance()
+        assert who == "daz-agent-sdk"
+        assert why is None
+
+    def test_ambient_env_overrides_who_and_sets_why(self, monkeypatch):
+        monkeypatch.setenv("ARBITER_WHO", "beezle3")
+        monkeypatch.setenv("ARBITER_WHY", "hang williams video")
+        provider = ArbiterProvider.__new__(ArbiterProvider)
+        who, why = provider._provenance()
+        assert who == "beezle3"
+        assert why == "hang williams video"
+
+    def test_values_are_capped(self, monkeypatch):
+        monkeypatch.setenv("ARBITER_WHO", "x" * 300)
+        monkeypatch.setenv("ARBITER_WHY", "y" * 300)
+        provider = ArbiterProvider.__new__(ArbiterProvider)
+        who, why = provider._provenance()
+        assert who is not None and len(who) == 128
+        assert why is not None and len(why) == 256
