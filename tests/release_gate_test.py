@@ -7,6 +7,7 @@ unattributable must select every area.
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import sys
 from importlib.machinery import SourceFileLoader
@@ -14,6 +15,7 @@ from pathlib import Path
 from types import ModuleType
 
 GATE_PATH = Path(__file__).resolve().parent.parent / "release-gate"
+RUN_PATH = Path(__file__).resolve().parent.parent / "run"
 ALL_AREAS = {"scan", "python", "go", "image"}
 
 
@@ -104,3 +106,78 @@ def test_phase_dependencies_all_resolve(tmp_path: Path) -> None:
     for phase in phases:
         for need in phase.needs:
             assert need in names, f"{phase.name} needs unknown phase {need}"
+
+
+def test_release_keeps_pypi_token_in_process_memory() -> None:
+    source = RUN_PATH.read_text()
+    tree = ast.parse(source)
+    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
+    process_calls = [
+        call
+        for call in calls
+        if isinstance(call.func, ast.Attribute)
+        and isinstance(call.func.value, ast.Name)
+        and call.func.value.id == "subprocess"
+        and call.func.attr == "Popen"
+    ]
+
+    assert '"/Users/darrenoakey/.local/bin/daz-secrets"' in source
+    assert "TWINE_PASSWORD" not in source
+    assert "TWINE_USERNAME" not in source
+    assert len(process_calls) == 1
+    process_keywords = {keyword.arg: keyword.value for keyword in process_calls[0].keywords}
+    assert ast.literal_eval(process_keywords["env"]) == {}
+    assert ast.literal_eval(process_keywords["start_new_session"]) is True
+    assert "stderr=subprocess.DEVNULL" in source
+    assert "os.killpg(process.pid, signal.SIGKILL)" in source
+    assert "4097 - len(output)" in source
+    assert "Settings(username=\"__token__\", password=token, non_interactive=True)" in source
+    assert "twine_upload.upload(" in source
+
+
+def test_release_installs_and_verifies_with_same_global_python() -> None:
+    source = RUN_PATH.read_text()
+    tree = ast.parse(source)
+    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
+
+    install_calls = [
+        call
+        for call in calls
+        if isinstance(call.func, ast.Attribute)
+        and isinstance(call.func.value, ast.Name)
+        and call.func.value.id == "subprocess"
+        and call.func.attr == "run"
+        and call.args
+        and isinstance(call.args[0], ast.List)
+        and any(
+            isinstance(element, ast.JoinedStr)
+            and "daz-agent-sdk==" in ast.unparse(element)
+            for element in call.args[0].elts
+        )
+    ]
+    verification_calls = [
+        call
+        for call in calls
+        if isinstance(call.func, ast.Attribute)
+        and isinstance(call.func.value, ast.Name)
+        and call.func.value.id == "subprocess"
+        and call.func.attr == "check_output"
+    ]
+
+    assert 'shutil.which("python3")' in source
+    assert "str(Path(global_python_command).resolve())" in source
+    assert len(install_calls) == 1
+    install_command = install_calls[0].args[0]
+    assert isinstance(install_command, ast.List)
+    assert isinstance(install_command.elts[0], ast.Name)
+    assert install_command.elts[0].id == "global_python"
+    assert [ast.literal_eval(element) for element in install_command.elts[1:4]] == [
+        "-m",
+        "pip",
+        "install",
+    ]
+    assert len(verification_calls) == 1
+    verification_command = verification_calls[0].args[0]
+    assert isinstance(verification_command, ast.List)
+    assert isinstance(verification_command.elts[0], ast.Name)
+    assert verification_command.elts[0].id == "global_python"

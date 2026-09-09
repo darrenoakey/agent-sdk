@@ -2,10 +2,56 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 
 	sdk "github.com/darrenoakey/daz-agent-sdk/go"
 )
+
+func TestOpenAIRequestCompletionControls(t *testing.T) {
+	tests := []struct {
+		name          string
+		opts          sdk.CompleteOpts
+		wantReasoning bool
+		wantMaxTokens bool
+	}{
+		{
+			name: "Supplied",
+			opts: sdk.CompleteOpts{
+				ReasoningEffort: "none",
+				MaxTokens:       128,
+			},
+			wantReasoning: true,
+			wantMaxTokens: true,
+		},
+		{name: "Omitted", opts: sdk.CompleteOpts{}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := buildArbiterCompleteRequest("local-chat", nil, nil, test.opts, "test", "classification")
+			encoded, err := json.Marshal(request)
+			if err != nil {
+				t.Fatalf("marshalling request: %v", err)
+			}
+			body := string(encoded)
+			hasReasoning := strings.Contains(body, `"reasoning_effort"`)
+			if hasReasoning != test.wantReasoning {
+				t.Errorf("reasoning_effort presence in %s = %t, want %t", body, hasReasoning, test.wantReasoning)
+			}
+			hasMaxTokens := strings.Contains(body, `"max_tokens"`)
+			if hasMaxTokens != test.wantMaxTokens {
+				t.Errorf("max_tokens presence in %s = %t, want %t", body, hasMaxTokens, test.wantMaxTokens)
+			}
+			if test.wantReasoning && request.ReasoningEffort != "none" {
+				t.Errorf("ReasoningEffort = %q, want none", request.ReasoningEffort)
+			}
+			if test.wantMaxTokens && request.MaxTokens != 128 {
+				t.Errorf("MaxTokens = %d, want 128", request.MaxTokens)
+			}
+		})
+	}
+}
 
 func testArbiterModel() sdk.ModelInfo {
 	return sdk.ModelInfo{
@@ -101,6 +147,22 @@ func TestArbiterCompleteWrongPortRaisesAgentError(t *testing.T) {
 	}
 	if agentErr.Kind != sdk.ErrorNotAvailable {
 		t.Errorf("Kind = %v, want ErrorNotAvailable", agentErr.Kind)
+	}
+}
+
+func TestArbiterCompleteNegativeMaxTokensReturnsInvalidRequest(t *testing.T) {
+	provider := NewArbiterProvider("http://localhost:19999")
+	messages := []sdk.Message{{Role: "user", Content: "hello"}}
+	_, err := provider.Complete(context.Background(), messages, testArbiterModel(), sdk.CompleteOpts{MaxTokens: -1})
+	if err == nil {
+		t.Fatal("Complete should reject negative MaxTokens")
+	}
+	agentError, ok := err.(*sdk.AgentError)
+	if !ok {
+		t.Fatalf("err is not *sdk.AgentError: %T: %v", err, err)
+	}
+	if agentError.Kind != sdk.ErrorInvalidRequest {
+		t.Errorf("Kind = %v, want ErrorInvalidRequest", agentError.Kind)
 	}
 }
 

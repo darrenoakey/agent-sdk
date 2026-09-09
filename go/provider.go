@@ -6,6 +6,10 @@ import "context"
 type CompleteOpts struct {
 	// Schema is the JSON schema for structured output (nil for plain text).
 	Schema any
+	// ReasoningEffort controls reasoning for Arbiter completions. Empty omits it.
+	ReasoningEffort string
+	// MaxTokens limits output tokens for Arbiter completions. Zero omits it.
+	MaxTokens int
 	// Timeout in seconds. Zero means use provider default.
 	Timeout float64
 	// Tools is a list of tool names for agentic providers.

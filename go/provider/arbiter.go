@@ -179,10 +179,12 @@ type openAIMessage struct {
 
 // openAIRequest is the JSON payload for /v1/chat/completions.
 type openAIRequest struct {
-	Model          string          `json:"model"`
-	Messages       []openAIMessage `json:"messages"`
-	Stream         bool            `json:"stream"`
-	ResponseFormat any             `json:"response_format,omitempty"`
+	Model           string          `json:"model"`
+	Messages        []openAIMessage `json:"messages"`
+	Stream          bool            `json:"stream"`
+	ResponseFormat  any             `json:"response_format,omitempty"`
+	ReasoningEffort string          `json:"reasoning_effort,omitempty"`
+	MaxTokens       int             `json:"max_tokens,omitempty"`
 	// Who/Why are non-standard caller-provenance fields the arbiter pops
 	// server-side before routing; they never reach the model.
 	Who string `json:"who,omitempty"`
@@ -230,6 +232,19 @@ func buildArbiterMessages(messages []sdk.Message) []openAIMessage {
 	return out
 }
 
+func buildArbiterCompleteRequest(modelID string, messages []openAIMessage, responseFormat any, opts sdk.CompleteOpts, who, why string) openAIRequest {
+	return openAIRequest{
+		Model:           modelID,
+		Messages:        messages,
+		Stream:          false,
+		ResponseFormat:  responseFormat,
+		ReasoningEffort: opts.ReasoningEffort,
+		MaxTokens:       opts.MaxTokens,
+		Who:             who,
+		Why:             why,
+	}
+}
+
 // applySchemaInstruction mutates msgs to append the JSON schema as a
 // system-message instruction — the arbiter's vLLM worker does not
 // always honour the OpenAI response_format field, and schema-in-prompt
@@ -264,6 +279,10 @@ func applySchemaInstruction(msgs []openAIMessage, schema any) []openAIMessage {
 // structured-output machinery in Conversation handles validation from
 // the returned JSON text.
 func (a *ArbiterProvider) Complete(ctx context.Context, messages []sdk.Message, model sdk.ModelInfo, opts sdk.CompleteOpts) (*sdk.Response, error) {
+	if opts.MaxTokens < 0 {
+		return nil, sdk.NewAgentError("Arbiter max tokens must not be negative", sdk.ErrorInvalidRequest, nil)
+	}
+
 	// Only impose a wall-clock deadline when the caller asked for one. The
 	// arbiter is queue-backed: a job can sit hundreds deep behind unrelated
 	// traffic on spark, and a GPU cold-load is ~10 minutes. We do not want
@@ -290,14 +309,7 @@ func (a *ArbiterProvider) Complete(ctx context.Context, messages []sdk.Message, 
 	}
 
 	who, why := arbiterProvenance()
-	payload := openAIRequest{
-		Model:          model.ModelID,
-		Messages:       msgs,
-		Stream:         false,
-		ResponseFormat: responseFormat,
-		Who:            who,
-		Why:            why,
-	}
+	payload := buildArbiterCompleteRequest(model.ModelID, msgs, responseFormat, opts, who, why)
 
 	body, err := json.Marshal(payload)
 	if err != nil {

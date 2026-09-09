@@ -22,15 +22,18 @@ else:
         print("Installing daz-agent-sdk as editable package (system-wide)...")
         rc = subprocess.run(
             [sys.executable, "-m", "pip", "install", "-e", str(SCRIPT_DIR)],
+            check=False,
         ).returncode
         sys.exit(rc)
 
     # deploy/publish: bump version, build, upload to PyPI, install globally from PyPI
     if len(sys.argv) > 1 and sys.argv[1] in ("deploy", "publish"):
+        import glob
         import json
         import re
+        import selectors
         import shutil
-        import glob
+        import signal
         import time
         import urllib.error
         import urllib.request
@@ -38,18 +41,65 @@ else:
         def pypi_token() -> str:
             # Headless greenline cannot use macOS keyring/security-keyring.
             # daz-secrets is the configured non-interactive credential path.
+            command = [
+                "/Users/darrenoakey/.local/bin/daz-secrets",
+                "get",
+                "pypi",
+                "api_token",
+            ]
             try:
-                out = subprocess.check_output(
-                    ["daz-secrets", "get", "pypi", "api_token"],
-                    text=True,
+                process = subprocess.Popen(
+                    command,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    env={},
+                    start_new_session=True,
                 )
             except FileNotFoundError as exc:
-                print("ERROR: daz-secrets not found on PATH")
+                print("ERROR: canonical daz-secrets CLI is unavailable")
                 raise SystemExit(1) from exc
-            except subprocess.CalledProcessError as exc:
+
+            def stop_process() -> None:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.wait()
+
+            assert process.stdout is not None
+            deadline = time.monotonic() + 15
+            output = bytearray()
+            try:
+                with selectors.DefaultSelector() as selector:
+                    selector.register(process.stdout, selectors.EVENT_READ)
+                    while True:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0 or not selector.select(remaining):
+                            stop_process()
+                            print("ERROR: daz-secrets get pypi api_token timed out")
+                            raise SystemExit(1)
+                        chunk = os.read(process.stdout.fileno(), 4097 - len(output))
+                        if not chunk:
+                            break
+                        output.extend(chunk)
+                        if len(output) > 4096:
+                            stop_process()
+                            print("ERROR: PyPI token from daz-secrets exceeds the permitted size")
+                            raise SystemExit(1)
+                process.wait(timeout=max(0.001, deadline - time.monotonic()))
+            except subprocess.TimeoutExpired:
+                stop_process()
+                print("ERROR: daz-secrets get pypi api_token timed out")
+                raise SystemExit(1)
+            if process.returncode != 0:
                 print("ERROR: daz-secrets get pypi api_token failed")
+                raise SystemExit(1)
+            try:
+                token = output.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                print("ERROR: PyPI token from daz-secrets is not UTF-8")
                 raise SystemExit(1) from exc
-            token = out.strip()
             if not token:
                 print("ERROR: empty PyPI token from daz-secrets (service='pypi', account='api_token')")
                 raise SystemExit(1)
@@ -100,7 +150,11 @@ else:
 
         version_file = SCRIPT_DIR / "src" / "daz_agent_sdk" / "__init__.py"
         text = version_file.read_text()
-        m = re.search(r'^__version__ = ["\'](\d+)\.(\d+)\.(\d+)["\']', text, re.M)
+        m = re.search(
+            r'^__version__ = ["\'](\d+)\.(\d+)\.(\d+)["\']',
+            text,
+            re.MULTILINE,
+        )
         if not m:
             print("ERROR: version not found in __init__.py")
             sys.exit(1)
@@ -119,7 +173,7 @@ else:
             r'^(__version__ = ["\'])\d+\.\d+\.\d+(["\'])',
             rf"\g<1>{new_ver}\g<2>",
             text,
-            flags=re.M,
+            flags=re.MULTILINE,
         )
         # Idempotent re-run (greenline re-runs `deploy` as its health probe):
         # when the bumped version is ALREADY on PyPI the publish happened and
@@ -159,14 +213,13 @@ else:
 
             # upload to PyPI
             token = pypi_token()
-            env = os.environ.copy()
-            env["TWINE_USERNAME"] = "__token__"
-            env["TWINE_PASSWORD"] = token
             dist_files = glob.glob(str(SCRIPT_DIR / "dist" / "*"))
-            subprocess.run(
-                [sys.executable, "-m", "twine", "upload"] + dist_files,
-                env=env,
-                check=True,
+            from twine.commands import upload as twine_upload
+            from twine.settings import Settings
+
+            twine_upload.upload(
+                Settings(username="__token__", password=token, non_interactive=True),
+                dist_files,
             )
             # PyPI's edge cache serves the pre-upload 404 for this release
             # URL for a while after the upload is accepted (2026-09-04: 0.2.33
@@ -194,24 +247,44 @@ else:
         # still resolve from the index as usual.
         dist_dir = SCRIPT_DIR / "dist"
         find_links = ["--find-links", str(dist_dir)] if dist_dir.is_dir() else []
+        global_python_command = shutil.which("python3")
+        if global_python_command is None:
+            print("ERROR: global python3 is unavailable")
+            sys.exit(1)
+        global_python = str(Path(global_python_command).resolve())
         installed = False
         attempts = 6
         for attempt in range(1, attempts + 1):
             result = subprocess.run(
-                ["pip", "install", "--upgrade", *find_links, f"daz-agent-sdk=={new_ver}"],
+                [
+                    global_python,
+                    "-m",
+                    "pip",
+                    "install",
+                    "--upgrade",
+                    *find_links,
+                    f"daz-agent-sdk=={new_ver}",
+                ],
                 check=False,
             )
             if result.returncode == 0:
                 installed = True
                 break
             if attempt < attempts:
-                print(f"pip could not install {new_ver} yet; retrying in 10 seconds ({attempt}/{attempts})...")
+                print(
+                    f"pip could not install {new_ver} yet; retrying in 10 seconds ({attempt}/{attempts})..."
+                )
                 time.sleep(10)
         if not installed:
             print(f"ERROR: Published daz-agent-sdk {new_ver}, but could not install it")
             sys.exit(1)
         reported = subprocess.check_output(
-            ["python3", "-c", "import daz_agent_sdk; print(daz_agent_sdk.__version__)"], text=True
+            [
+                global_python,
+                "-c",
+                "import daz_agent_sdk; print(daz_agent_sdk.__version__)",
+            ],
+            text=True,
         ).strip()
         if reported != new_ver:
             print(f"ERROR: global daz_agent_sdk reports {reported}, expected {new_ver}")

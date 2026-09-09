@@ -7,6 +7,7 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	sdk "github.com/darrenoakey/daz-agent-sdk/go"
+	"github.com/google/uuid"
 )
 
 func requireArbiterProvider(t *testing.T) *ArbiterProvider {
@@ -170,6 +172,47 @@ func TestArbiterCompleteWithSystemMessage(t *testing.T) {
 	if !strings.Contains(resp.Text, "Paris") {
 		t.Errorf("response text = %q, expected to contain 'Paris'", resp.Text)
 	}
+}
+
+func TestArbiterCompleteLocalChatWithoutReasoning(t *testing.T) {
+	provider := NewArbiterProvider("http://127.0.0.1:8400")
+	requestID := uuid.NewString()
+	messages := []sdk.Message{{
+		Role:    "user",
+		Content: "Classify request " + requestID + " as support or sales. Request: I need help resetting my password.",
+	}}
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"classification": map[string]any{"type": "string", "enum": []string{"support", "sales"}},
+		},
+		"required":             []string{"classification"},
+		"additionalProperties": false,
+	}
+	model := testArbiterModel()
+	model.ModelID = "local-chat"
+	started := time.Now()
+	response, err := provider.Complete(context.Background(), messages, model, sdk.CompleteOpts{
+		Schema:          schema,
+		ReasoningEffort: "none",
+		MaxTokens:       128,
+		Timeout:         20,
+	})
+	if err != nil {
+		t.Fatalf("Complete returned error: %v", err)
+	}
+	elapsed := time.Since(started)
+	if elapsed >= 20*time.Second {
+		t.Fatalf("Complete elapsed %s, want under 20s", elapsed)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(response.Text), &parsed); err != nil {
+		t.Fatalf("response is not valid final JSON: %q: %v", response.Text, err)
+	}
+	if parsed["classification"] != "support" {
+		t.Fatalf("classification = %v, want support", parsed["classification"])
+	}
+	t.Logf("fresh request_id=%s elapsed=%s usage=%v response=%s", requestID, elapsed, response.Usage, response.Text)
 }
 
 func TestArbiterStreamYieldsChunks(t *testing.T) {
